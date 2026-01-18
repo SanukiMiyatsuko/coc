@@ -70,8 +70,63 @@ function showCtxElement(e: CtxElement): string {
     return `var ${e.name} : ${showTerm(e.type)}`;
 }
 
+const init = `def id (A : Prop) (x : A) : A := x;
+
+def Nat: Prop := forall (A: Prop), (A -> A) -> A -> A;
+
+def zero: Nat :=
+  fun (A: Prop) (f: A -> A) (x: A) => x;
+
+def succ : Nat -> Nat :=
+  fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => f (n A f x);
+
+
+def Bool: Prop := forall (A: Prop), A -> A -> A;
+
+def true: Bool := fun (A: Prop) (x y: A) => x;
+
+def false: Bool := fun (A: Prop) (x y: A) => y;
+
+def or: Bool -> Bool -> Bool :=
+  fun (a b: Bool) => a Bool true b;
+
+def and: Bool -> Bool -> Bool :=
+  fun (a b: Bool) => a Bool b false;
+
+def not: Bool -> Bool :=
+  fun (a: Bool) => a Bool false true;
+
+
+def Prod (A B: Prop): Prop :=
+  forall (C: Prop), (A -> B -> C) -> C;
+
+def pair (A B: Prop): A -> B -> Prod A B :=
+  fun (a: A) (b: B) (C: Prop) (f: A -> B -> C) => f a b;
+
+def left (A B: Prop): Prod A B -> A :=
+  fun (p: Prod A B) => p A (fun (a: A) (b: B) => a);
+
+def right (A B: Prop): Prod A B -> B :=
+  fun (p: Prod A B) => p B (fun (a: A) (b: B) => b);
+
+
+def iter : Nat -> forall (A : Prop), (A -> A) -> A -> A :=
+  fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => n A f x;
+
+def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
+  fun (n : Nat) (A : Prop) (a : A) (s : Nat -> A -> A) =>
+    let step : Prod Nat A -> Prod Nat A :=
+      fun (p : Prod Nat A) =>
+        pair Nat A
+          (succ (left Nat A p))
+          (s (left Nat A p) (right Nat A p)) in
+      right Nat A (n (Prod Nat A) step (pair Nat A zero a));
+
+def List (A: Prop): Prop :=
+  forall (L: Prop), L -> (A -> L -> L) -> L;`
+
 export default function App() {
-  const [source, setSource] = useState(`def id (A : Prop) (x : A) : A := x;`);
+  const [source, setSource] = useState(init);
   const [error, setError] = useState<UIError | null>(null);
   const [success, setSuccess] = useState<string>("");
   const [successDefs, setSuccessDefs] = useState<string[]>([]);
