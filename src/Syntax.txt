@@ -1,0 +1,33 @@
+空白はあってもなくても構わない。
+正規表現のメタ文字も利用する。
+
+予約語：
+def
+var
+Prop
+Type
+fun
+forall
+let
+in
+
+文字列：
+<ident> ::= [a-zA-Z_][\w']*
+<blanks> ::= \s+
+項：
+<sort> ::= Prop | Type
+<variable> ::= <ident>
+<binder> ::= \(<ident>+:<type>\)
+<lam> ::= fun<binder>+=><term>
+<pi> ::= forall<binder>+,<type>
+<let> ::= let<ident><binder>*:<type>:=<term>in<term>
+<atom> ::= <sort> | <variable> | \(<term>\)
+<app> ::= <atom>+
+<arrow> ::= <app> | <app>-><term>
+<term> ::= <lam> | <pi> | <let> | <arrow>
+<type> ::= <term>
+トップレベル：
+<line_comment> ::= --[^\n]*(?:\n|$)
+<block_comment> ::= {-[\s\S]*?-}
+<global_def> ::= def<ident><binder>*:<type>:=<term>;
+<global_var> ::= var<ident><binder>*:<type>;
