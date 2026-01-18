@@ -5,7 +5,7 @@
   "type": "module",
   "homepage": "https://SanukiMiyatsuko.github.io/coc",
   "scripts": {
-    "predeploy": "yarn build && node copy404.js",
+    "predeploy": "yarn build",
     "deploy": "gh-pages -d dist",
     "dev": "vite",
     "build": "tsc -b && vite build",
