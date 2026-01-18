@@ -1,0 +1,13 @@
+html body {
+  background-color: #1e1e1e;
+  color: hsla(0, 0%, 100%, 0.89);
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}

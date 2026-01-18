@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CustomLanguageEditor } from "./language"
 import "./app.css";
 import { type Term } from "./ast";
 import { Tokenizer } from "./tokenize";
@@ -70,7 +71,8 @@ function showCtxElement(e: CtxElement): string {
     return `var ${e.name} : ${showTerm(e.type)}`;
 }
 
-const init = `def id (A : Prop) (x : A) : A := x;
+const init =
+`def id (A : Prop) (x : A) : A := x;
 
 def Nat: Prop := forall (A: Prop), (A -> A) -> A -> A;
 
@@ -109,6 +111,12 @@ def left (A B: Prop): Prod A B -> A :=
 def right (A B: Prop): Prod A B -> B :=
   fun (p: Prod A B) => p B (fun (a: A) (b: B) => b);
 
+def and_intro (A B C: Prop) (im_a: C -> A) (im_b: C -> B): C -> Prod A B :=
+  fun (c: C) =>
+    let a: A := im_a c in
+      let b: B := im_b c in
+        pair A B a b;
+
 
 def iter : Nat -> forall (A : Prop), (A -> A) -> A -> A :=
   fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => n A f x;
@@ -122,8 +130,70 @@ def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
           (s (left Nat A p) (right Nat A p)) in
       right Nat A (n (Prod Nat A) step (pair Nat A zero a));
 
+
 def List (A: Prop): Prop :=
-  forall (L: Prop), L -> (A -> L -> L) -> L;`
+  forall (L: Prop), L -> (A -> L -> L) -> L;
+
+def nil (A: Prop): List A :=
+  fun (L: Prop) (x: L) (f: A -> L -> L) => x;
+
+def cons (A: Prop): A -> List A -> List A :=
+  fun (a: A) (s: List A) (L: Prop) (x: L) (f: A -> L -> L) => f a (s L x f);
+
+
+def Union (A B: Prop): Prop :=
+  forall (C: Prop), (A -> C) -> (B -> C) -> C;
+
+def in_l (A B: Prop): A -> Union A B :=
+  fun (a: A) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_a a;
+
+def in_r (A B: Prop): B -> Union A B :=
+  fun (b: B) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_b b;
+
+def or_elim (A B C: Prop) (im_a: A -> C) (im_b: B -> C): Union A B -> C :=
+  fun (union: Union A B) => union C im_a im_b;
+
+
+def Contra: Prop := forall (A: Prop), A;
+
+def Not (A: Prop): Prop := A -> Contra;
+
+def Not_elim (A: Prop): Contra -> A := fun (co: Contra) => co A;
+
+
+def EM: Prop := forall (A: Prop), Union A (Not A);
+
+def DNE: Prop := forall (A: Prop), Not (Not A) -> A;
+
+def EM_to_DNE: EM -> DNE :=
+  fun (em: EM) =>
+    fun (A: Prop) =>
+      fun (nna: Not (Not A)) =>
+        (or_elim A (Not A) A (id A) (fun (na: Not A) => Not_elim A (nna na)) (em A));
+
+def DNE_to_EM: DNE -> EM :=
+  fun (dne: DNE) =>
+    fun (A: Prop) =>
+      let nnEM: Not (Not (Union A (Not A))) :=
+        fun (p: Not (Union A (Not A))) =>
+          let na: Not A := fun (a: A) => p (in_l A (Not A) a) in
+            p (in_r A (Not A) na) in
+        dne (Union A (Not A)) nnEM;
+
+
+def Eq (A: Prop) (a b: A): Prop := forall (P: A -> Prop), P a -> P b;
+
+def ref (A: Prop) (a: A): Eq A a a := fun (P: A -> Prop) => id (P a);
+
+def symm (A: Prop) (a b: A): Eq A a b -> Eq A b a :=
+  fun (eqab: Eq A a b) (P: A -> Prop) =>
+    let q : (P a -> P a) -> (P b -> P a) :=
+      eqab (fun (x : A) => P x -> P a) in
+      q (id (P a));
+
+def trans (A: Prop) (a b c: A) : Eq A a b -> Eq A b c -> Eq A a c :=
+  fun (eqab: Eq A a b) (eqbc: Eq A b c) (P: A -> Prop) (pa: P a) =>
+    eqbc P (eqab P pa);`
 
 export default function App() {
   const [source, setSource] = useState(init);
@@ -262,24 +332,27 @@ export default function App() {
 
   return (
     <div className="app">
-      <header>Mini CoC Playground</header>
-      <textarea
-        value={source}
-        onChange={e => setSource(e.target.value)}
-        spellCheck={false}
+      <header>
+        CoC Playground
+      </header>
+      <CustomLanguageEditor
+        source={source}
+        replace={e => setSource(e)}
       />
-      <div className="controls">
-        <button onClick={run}>Check</button>
-      </div>
-      <div className="result">
-        {error && renderError(error)}
-        {success &&
-          <div className="success">
-            {success+" "}
-            {successDefs.join(", ")}
-          </div>
-        }
-      </div>
+      <footer>
+        <div className="controls">
+          <button onClick={run}>Check</button>
+        </div>
+        <div className="result">
+          {error && renderError(error)}
+          {success &&
+            <div className="success">
+              {success+" "}
+              {successDefs.join(", ")}
+            </div>
+          }
+        </div>
+      </footer>
     </div>
   );
 }
