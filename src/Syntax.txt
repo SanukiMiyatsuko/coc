@@ -31,3 +31,4 @@ in
 <block_comment> ::= {-[\s\S]*?-}
 <global_def> ::= def<ident><binder>*:<type>:=<term>;
 <global_var> ::= var<ident><binder>*:<type>;
+<program> ::= (<global_def> | <global_var>)* EOF

@@ -6,8 +6,8 @@ import { type TokenType, type Token, type Range } from "./tokenize";
 type ParseError =
   | { tag: "UnexpectedToken"; expected: TokenType; actual: Token }
   | { tag: "ExpectedAtom"; token: Token }
-  | { tag: "ExtraneousDef"; def: Term }
-  | { tag: "ExpectedDef" };
+  | { tag: "ExtraneousDef"; def: Term; range: Range }
+  | { tag: "ExpectedDef"; range: Range };
 
 export type ParseNode = {
   id: number;
@@ -21,7 +21,10 @@ export type ParseNode = {
 type GlobalDef = {
   name: string;
   type: Term;
-  body?: Term;
+  body?: {
+    term: Term;
+    range: Range;
+  };
 };
 
 export class Parser {
@@ -327,7 +330,7 @@ export class Parser {
     });
   }
 
-  private parseDefVarBody(): Result<{ type: Term; body?: Term }, ParseError> {
+  private parseDefVarBody(): Result<{ type: Term; body?: { term: Term; range: Range } }, ParseError> {
     return this.withNode("parseDefBody", () => {
       const binders = [];
       let cur = this.peek();
@@ -350,11 +353,14 @@ export class Parser {
           ),
         type.value
       );
-      if (this.consume(this.peek(), "ASSIGN")) {
+      const t = this.peek();
+      if (this.consume(t, "ASSIGN")) {
+        const start = t.range.start;
         const body = this.parseTerm();
         if (isErr(body))
           return body;
-        const bodyLam = binders.reduceRight(
+        const end = this.peek().range.end;
+        const term = binders.reduceRight(
           (acc, { names, type }) =>
             names.reduceRight(
               (acc2, name) => lam(name, type, acc2),
@@ -362,7 +368,7 @@ export class Parser {
             ),
           body.value
         );
-        return succ({ type: typePi, body: bodyLam });
+        return succ({ type: typePi, body: { term, range: { start, end } } });
       }
       return succ({ type: typePi });
     });
@@ -395,9 +401,11 @@ export class Parser {
           if (isErr(global))
             return global;
           const parsed = global.value;
-          if (!parsed.body)
-            return err({ tag: "ExpectedDef" });
-          defs.push(ctxDef(parsed.name, parsed.type, parsed.body));
+          if (!parsed.body) {
+            const t = this.tokens[this.tokenPos - 1] ?? this.peek();
+            return err({ tag: "ExpectedDef", range: t.range });
+          }
+          defs.push(ctxDef(parsed.name, parsed.type, parsed.body.term));
         } else {
           const res_var = this.expect("RES_VAR");
           if (isErr(res_var))
@@ -407,7 +415,7 @@ export class Parser {
             return global;
           const parsed = global.value;
           if (parsed.body)
-            return err({ tag: "ExtraneousDef", def: parsed.body });
+            return err({ tag: "ExtraneousDef", def: parsed.body.term, range: parsed.body.range });
           defs.push(ctxVar(parsed.name, parsed.type));
         }
       }
