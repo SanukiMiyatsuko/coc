@@ -89,7 +89,6 @@ export const CustomLanguageEditor = ({ source, replace }: { source: string;  rep
     monaco.languages.setMonarchTokensProvider('myLang', languageDefinition);
     monaco.editor.defineTheme('myTheme', customTheme);
   }
-
   return (
     <>
       <div style={{ 

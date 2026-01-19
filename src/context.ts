@@ -1,5 +1,5 @@
-import { type Result, succ, err, isErr } from "./result";
 import { type Name } from "./ast";
+import { type Result, succ, err, isErr } from "./result";
 import { type CtxElement, type JudgContext } from "./core";
 import { freeVar } from "./definition";
 

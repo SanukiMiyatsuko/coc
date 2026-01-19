@@ -17,10 +17,12 @@ in
 項：
 <sort> ::= Prop | Type
 <variable> ::= <ident>
-<binder> ::= \(<ident>+:<type>\)
-<lam> ::= fun<binder>+=><term>
-<pi> ::= forall<binder>+,<type>
-<let> ::= let<ident><binder>*:<type>:=<term>in<term>
+<open_binder> ::= <ident>+:<type>
+<closed_binder> ::= \(<open_binder>\)
+<binder> ::= <open_binder> | <closed_binder>+
+<lam> ::= fun<binder>=><term>
+<pi> ::= forall<binder>,<type>
+<let> ::= let<ident><closed_binder>*:<type>:=<term>in<term>
 <atom> ::= <sort> | <variable> | \(<term>\)
 <app> ::= <atom>+
 <arrow> ::= <app> | <app>-><type>
@@ -29,6 +31,6 @@ in
 トップレベル：
 <line_comment> ::= --[^\n]*(?:\n|$)
 <block_comment> ::= {-[\s\S]*?-}
-<global_def> ::= def<ident><binder>*:<type>:=<term>;
-<global_var> ::= var<ident><binder>*:<type>;
+<global_def> ::= def<ident><closed_binder>*:<type>:=<term>;
+<global_var> ::= var<ident><closed_binder>*:<type>;
 <program> ::= (<global_def> | <global_var>)* EOF

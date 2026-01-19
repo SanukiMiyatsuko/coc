@@ -1,10 +1,11 @@
-import { type Result, succ, err, isErr } from "./result";
 import { type Term, sort, varia, lam, pi, letIn, app } from "./ast";
+import { type Result, succ, err, isErr } from "./result";
 import { type Context, ctxVar, ctxDef } from "./core";
 import { type TokenType, type Token, type Range } from "./tokenize";
 
 type ParseError =
   | { tag: "UnexpectedToken"; expected: TokenType; actual: Token }
+  | { tag: "ExpectedBinder"; token: Token }
   | { tag: "ExpectedAtom"; token: Token }
   | { tag: "ExtraneousDef"; def: Term; range: Range }
   | { tag: "ExpectedDef"; range: Range };
@@ -103,11 +104,8 @@ export class Parser {
     return true;
   }
 
-  private parseBinder(): Result<{ names: string[]; type: Term }, ParseError> {
-    return this.withNode("parseBinder", () => {
-      const lparen = this.expect("LPAREN");
-      if (isErr(lparen))
-        return lparen;
+  private parseOpenBinder(): Result<{ names: string[]; type: Term }, ParseError> {
+    return this.withNode("parseOpenBinder", () => {
       const name = this.expect("IDENT");
       if (isErr(name))
         return name;
@@ -123,10 +121,50 @@ export class Parser {
       const type = this.parseTerm();
       if (isErr(type))
         return type;
+      return succ({ names, type: type.value });
+    });
+  }
+
+  private parseClosedBinder(): Result<{ names: string[]; type: Term }, ParseError> {
+    return this.withNode("parseClosedBinder", () => {
+      const lparen = this.expect("LPAREN");
+      if (isErr(lparen))
+        return lparen;
+      const open_binder = this.parseOpenBinder();
+      if (isErr(open_binder))
+        return open_binder;
       const rparen = this.expect("RPAREN");
       if (isErr(rparen))
         return rparen;
-      return succ({ names, type: type.value });
+      return succ(open_binder.value);
+    });
+  }
+
+  private parseBinder(): Result<{ names: string[]; type: Term }[], ParseError> {
+    return this.withNode("parseBinder", () => {
+      const t = this.peek();
+      if (t.type === "IDENT") {
+        const open_binder = this.parseOpenBinder();
+        if (isErr(open_binder))
+          return open_binder;
+        return succ([open_binder.value]);
+      }
+      if (t.type === "LPAREN") {
+        const binder = this.parseClosedBinder();
+        if (isErr(binder))
+          return binder;
+        const binders = [binder.value];
+        let cur = this.peek();
+        while (cur.type === "LPAREN") {
+          const b = this.parseClosedBinder();
+          if (isErr(b))
+            return b;
+          binders.push(b.value);
+          cur = this.peek();
+        }
+        return succ(binders);
+      }
+      return err({ tag: "ExpectedBinder", token: t });
     });
   }
 
@@ -138,22 +176,13 @@ export class Parser {
       const binder = this.parseBinder();
       if (isErr(binder))
         return binder;
-      const binders = [binder.value];
-      let cur = this.peek();
-      while (cur.type === "LPAREN") {
-        const b = this.parseBinder();
-        if (isErr(b))
-          return b;
-        binders.push(b.value);
-        cur = this.peek();
-      }
       const fat_arrow = this.expect("FAT_ARROW");
       if (isErr(fat_arrow))
         return fat_arrow;
       const body = this.parseTerm();
       if (isErr(body))
         return body;
-      return succ(binders.reduceRight(
+      return succ(binder.value.reduceRight(
         (acc, { names, type }) =>
           names.reduceRight(
             (acc2, name) => lam(name, type, acc2),
@@ -172,22 +201,13 @@ export class Parser {
       const binder = this.parseBinder();
       if (isErr(binder))
         return binder;
-      const binders = [binder.value];
-      let cur = this.peek();
-      while (cur.type === "LPAREN") {
-        const b = this.parseBinder();
-        if (isErr(b))
-          return b;
-        binders.push(b.value);
-        cur = this.peek();
-      }
       const comma = this.expect("COMMA");
       if (isErr(comma))
         return comma;
       const body = this.parseTerm();
       if (isErr(body))
         return body;
-      return succ(binders.reduceRight(
+      return succ(binder.value.reduceRight(
         (acc, { names, type }) =>
           names.reduceRight(
             (acc2, name) => pi(name, type, acc2),
@@ -198,11 +218,8 @@ export class Parser {
     });
   }
 
-  private parseLet(): Result<Term, ParseError> {
-    return this.withNode("parseLet", () => {
-      const res_let = this.expect("RES_LET");
-      if (isErr(res_let))
-        return res_let;
+  parseDef(): Result<GlobalDef, ParseError> {
+    return this.withNode("parseDef", () => {
       const ident = this.expect("IDENT");
       if (isErr(ident))
         return ident;
@@ -210,47 +227,66 @@ export class Parser {
       const binders = [];
       let cur = this.peek();
       while (cur.type === "LPAREN") {
-        const b = this.parseBinder();
+        const b = this.parseClosedBinder();
         if (isErr(b))
           return b;
         binders.push(b.value);
         cur = this.peek();
       }
-      const colon = this.expect("COLON");
-      if (isErr(colon))
-        return colon;
-      const paramType = this.parseTerm();
-      if (isErr(paramType))
-        return paramType;
-      const paramTypePi = binders.reduceRight(
+      this.expect("COLON");
+      const type = this.parseTerm();
+      if (isErr(type))
+        return type;
+      const typePi = binders.reduceRight(
         (acc, { names, type }) =>
           names.reduceRight(
             (acc2, name) => pi(name, type, acc2),
             acc
           ),
-        paramType.value
+        type.value
       );
-      const assign = this.expect("ASSIGN");
-      if (isErr(assign))
-        return assign;
-      const def = this.parseTerm();
+      const t = this.peek();
+      let bodyObject = undefined;
+      if (this.consume(t, "ASSIGN")) {
+        const start = t.range.start;
+        const body = this.parseTerm();
+        if (isErr(body))
+          return body;
+        const end = this.peek().range.end;
+        const term = binders.reduceRight(
+          (acc, { names, type }) =>
+            names.reduceRight(
+              (acc2, name) => lam(name, type, acc2),
+              acc
+            ),
+          body.value
+        );
+        bodyObject = { term, range: { start, end } };
+      }
+      return succ({ name, type: typePi, body: bodyObject });
+    });
+  }
+
+  private parseLet(): Result<Term, ParseError> {
+    return this.withNode("parseLet", () => {
+      const res_let = this.expect("RES_LET");
+      if (isErr(res_let))
+        return res_let;
+      const def = this.parseDef();
       if (isErr(def))
         return def;
-      const defLam = binders.reduceRight(
-        (acc, { names, type }) =>
-          names.reduceRight(
-            (acc2, name) => lam(name, type, acc2),
-            acc
-          ),
-        def.value
-      );
+      const parsed = def.value;
+      if (!parsed.body) {
+        const t = this.tokens[this.tokenPos - 1] ?? this.peek();
+        return err({ tag: "ExpectedDef", range: t.range });
+      }
       const res_in = this.expect("RES_IN");
       if (isErr(res_in))
         return res_in;
       const body = this.parseTerm();
       if (isErr(body))
         return body;
-      return succ(letIn(name, paramTypePi, defLam, body.value));
+      return succ(letIn(parsed.name, parsed.type, parsed.body.term, body.value));
     });
   }
 
@@ -330,74 +366,12 @@ export class Parser {
     });
   }
 
-  private parseDefVarBody(): Result<{ type: Term; body?: { term: Term; range: Range } }, ParseError> {
-    return this.withNode("parseDefBody", () => {
-      const binders = [];
-      let cur = this.peek();
-      while (cur.type === "LPAREN") {
-        const b = this.parseBinder();
-        if (isErr(b))
-          return b;
-        binders.push(b.value);
-        cur = this.peek();
-      }
-      this.expect("COLON");
-      const type = this.parseTerm();
-      if (isErr(type))
-        return type;
-      const typePi = binders.reduceRight(
-        (acc, { names, type }) =>
-          names.reduceRight(
-            (acc2, name) => pi(name, type, acc2),
-            acc
-          ),
-        type.value
-      );
-      const t = this.peek();
-      if (this.consume(t, "ASSIGN")) {
-        const start = t.range.start;
-        const body = this.parseTerm();
-        if (isErr(body))
-          return body;
-        const end = this.peek().range.end;
-        const term = binders.reduceRight(
-          (acc, { names, type }) =>
-            names.reduceRight(
-              (acc2, name) => lam(name, type, acc2),
-              acc
-            ),
-          body.value
-        );
-        return succ({ type: typePi, body: { term, range: { start, end } } });
-      }
-      return succ({ type: typePi });
-    });
-  }
-
-  parseGlobal(): Result<GlobalDef, ParseError> {
-    return this.withNode("parseGlobal", () => {
-      const ident = this.expect("IDENT");
-      if (isErr(ident))
-        return ident;
-      const name = ident.value.value;
-      const defBody = this.parseDefVarBody();
-      if (isErr(defBody))
-        return defBody;
-      const { type, body } = defBody.value;
-      const semicolon = this.expect("SEMICOLON");
-      if (isErr(semicolon))
-        return semicolon;
-      const result = { name, type, body };
-      return succ(result);
-    });
-  }
-
   parseProgram(): Result<Context, ParseError> {
     return this.withNode("parseProgram", () => {
       const defs: Context = [];
       while (this.peek().type !== "EOF") {
         if (this.consume(this.peek(), "RES_DEF")) {
-          const global = this.parseGlobal();
+          const global = this.parseDef();
           if (isErr(global))
             return global;
           const parsed = global.value;
@@ -410,7 +384,7 @@ export class Parser {
           const res_var = this.expect("RES_VAR");
           if (isErr(res_var))
             return res_var;
-          const global = this.parseGlobal();
+          const global = this.parseDef();
           if (isErr(global))
             return global;
           const parsed = global.value;
@@ -418,6 +392,9 @@ export class Parser {
             return err({ tag: "ExtraneousDef", def: parsed.body.term, range: parsed.body.range });
           defs.push(ctxVar(parsed.name, parsed.type));
         }
+        const semicolon = this.expect("SEMICOLON");
+        if (isErr(semicolon))
+          return semicolon;
       }
       return succ(defs);
     });

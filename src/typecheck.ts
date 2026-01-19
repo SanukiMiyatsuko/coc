@@ -1,5 +1,5 @@
-import { type Result, succ, err, isErr } from "./result";
 import { type Name, type Term, sort, lam, pi, letIn, app } from "./ast";
+import { type Result, succ, err, isErr } from "./result";
 import { type CtxElement, type Context, ctxVar, ctxDef, type JudgContext, judgCtx } from "./core";
 import { subst, alphaEq } from "./definition";
 

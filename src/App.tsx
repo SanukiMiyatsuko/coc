@@ -2,12 +2,12 @@ import { useState } from "react";
 import { CustomLanguageEditor } from "./language"
 import "./app.css";
 import { type Term } from "./ast";
+import { isErr } from "./result";
+import { type CtxElement, judgCtx } from "./core";
 import { Tokenizer } from "./tokenize";
 import { Parser } from "./parse";
-import { type CtxElement, judgCtx } from "./core";
 import { wellFormed } from "./typecheck";
 import { checkJudgContext } from "./context";
-import { isErr } from "./result";
 
 type Phase = "tokenize" | "parse" | "context" | "typecheck";
 
@@ -74,7 +74,7 @@ function showCtxElement(e: CtxElement): string {
 const init =
 `def id (A : Prop) (x : A) : A := x;
 
-def Nat: Prop := forall (A: Prop), (A -> A) -> A -> A;
+def Nat: Prop := forall A: Prop, (A -> A) -> A -> A;
 
 def zero: Nat :=
   fun (A: Prop) (f: A -> A) (x: A) => x;
@@ -90,29 +90,29 @@ def true: Bool := fun (A: Prop) (x y: A) => x;
 def false: Bool := fun (A: Prop) (x y: A) => y;
 
 def or: Bool -> Bool -> Bool :=
-  fun (a b: Bool) => a Bool true b;
+  fun a b: Bool => a Bool true b;
 
 def and: Bool -> Bool -> Bool :=
-  fun (a b: Bool) => a Bool b false;
+  fun a b: Bool => a Bool b false;
 
 def not: Bool -> Bool :=
-  fun (a: Bool) => a Bool false true;
+  fun a: Bool => a Bool false true;
 
 
 def Prod (A B: Prop): Prop :=
-  forall (C: Prop), (A -> B -> C) -> C;
+  forall C: Prop, (A -> B -> C) -> C;
 
 def pair (A B: Prop): A -> B -> Prod A B :=
   fun (a: A) (b: B) (C: Prop) (f: A -> B -> C) => f a b;
 
 def left (A B: Prop): Prod A B -> A :=
-  fun (p: Prod A B) => p A (fun (a: A) (b: B) => a);
+  fun p: Prod A B => p A (fun (a: A) (b: B) => a);
 
 def right (A B: Prop): Prod A B -> B :=
-  fun (p: Prod A B) => p B (fun (a: A) (b: B) => b);
+  fun p: Prod A B => p B (fun (a: A) (b: B) => b);
 
 def and_intro (A B C: Prop) (im_a: C -> A) (im_b: C -> B): C -> Prod A B :=
-  fun (c: C) =>
+  fun c: C =>
     let a: A := im_a c in
       let b: B := im_b c in
         pair A B a b;
@@ -124,7 +124,7 @@ def iter : Nat -> forall (A : Prop), (A -> A) -> A -> A :=
 def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
   fun (n : Nat) (A : Prop) (a : A) (s : Nat -> A -> A) =>
     let step : Prod Nat A -> Prod Nat A :=
-      fun (p : Prod Nat A) =>
+      fun p : Prod Nat A =>
         pair Nat A
           (succ (left Nat A p))
           (s (left Nat A p) (right Nat A p)) in
@@ -132,7 +132,7 @@ def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
 
 
 def List (A: Prop): Prop :=
-  forall (L: Prop), L -> (A -> L -> L) -> L;
+  forall L: Prop, L -> (A -> L -> L) -> L;
 
 def nil (A: Prop): List A :=
   fun (L: Prop) (x: L) (f: A -> L -> L) => x;
@@ -142,7 +142,7 @@ def cons (A: Prop): A -> List A -> List A :=
 
 
 def Union (A B: Prop): Prop :=
-  forall (C: Prop), (A -> C) -> (B -> C) -> C;
+  forall C: Prop, (A -> C) -> (B -> C) -> C;
 
 def in_l (A B: Prop): A -> Union A B :=
   fun (a: A) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_a a;
@@ -151,44 +151,41 @@ def in_r (A B: Prop): B -> Union A B :=
   fun (b: B) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_b b;
 
 def or_elim (A B C: Prop) (im_a: A -> C) (im_b: B -> C): Union A B -> C :=
-  fun (union: Union A B) => union C im_a im_b;
+  fun union: Union A B => union C im_a im_b;
 
 
 def Contra: Prop := forall (A: Prop), A;
 
 def Not (A: Prop): Prop := A -> Contra;
 
-def Not_elim (A: Prop): Contra -> A := fun (co: Contra) => co A;
+def Not_elim (A: Prop): Contra -> A := fun co: Contra => co A;
 
 
-def EM: Prop := forall (A: Prop), Union A (Not A);
+def EM: Prop := forall A: Prop, Union A (Not A);
 
-def DNE: Prop := forall (A: Prop), Not (Not A) -> A;
+def DNE: Prop := forall A: Prop, Not (Not A) -> A;
 
 def EM_to_DNE: EM -> DNE :=
-  fun (em: EM) =>
-    fun (A: Prop) =>
-      fun (nna: Not (Not A)) =>
-        (or_elim A (Not A) A (id A) (fun (na: Not A) => Not_elim A (nna na)) (em A));
+  fun (em: EM) (A: Prop) (nna: Not (Not A)) =>
+    (or_elim A (Not A) A (id A) (fun (na: Not A) => Not_elim A (nna na)) (em A));
 
 def DNE_to_EM: DNE -> EM :=
-  fun (dne: DNE) =>
-    fun (A: Prop) =>
-      let nnEM: Not (Not (Union A (Not A))) :=
-        fun (p: Not (Union A (Not A))) =>
-          let na: Not A := fun (a: A) => p (in_l A (Not A) a) in
-            p (in_r A (Not A) na) in
-        dne (Union A (Not A)) nnEM;
+  fun (dne: DNE) (A: Prop) =>
+    let nnEM: Not (Not (Union A (Not A))) :=
+      fun (p: Not (Union A (Not A))) =>
+        let na: Not A := fun (a: A) => p (in_l A (Not A) a) in
+          p (in_r A (Not A) na) in
+      dne (Union A (Not A)) nnEM;
 
 
-def Eq (A: Prop) (a b: A): Prop := forall (P: A -> Prop), P a -> P b;
+def Eq (A: Prop) (a b: A): Prop := forall P: A -> Prop, P a -> P b;
 
-def ref (A: Prop) (a: A): Eq A a a := fun (P: A -> Prop) => id (P a);
+def ref (A: Prop) (a: A): Eq A a a := fun P: A -> Prop => id (P a);
 
 def symm (A: Prop) (a b: A): Eq A a b -> Eq A b a :=
   fun (eqab: Eq A a b) (P: A -> Prop) =>
     let q : (P a -> P a) -> (P b -> P a) :=
-      eqab (fun (x : A) => P x -> P a) in
+      eqab (fun x : A => P x -> P a) in
       q (id (P a));
 
 def trans (A: Prop) (a b c: A) : Eq A a b -> Eq A b c -> Eq A a c :=
@@ -231,6 +228,9 @@ export default function App() {
       switch (ctxR.err.tag) {
         case "UnexpectedToken":
           msg = `トークン ${ctxR.err.actual.type} は ${ctxR.err.expected} ではありません。`;
+          break;
+        case "ExpectedBinder":
+          msg = `Binderが必要な位置です。 (実際に検出されたもの: ${ctxR.err.token.type})`;
           break;
         case "ExpectedAtom":
           msg = `Atomが必要な位置です。 (実際に検出されたもの: ${ctxR.err.token.type})`;
