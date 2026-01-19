@@ -23,7 +23,7 @@ in
 <let> ::= let<ident><binder>*:<type>:=<term>in<term>
 <atom> ::= <sort> | <variable> | \(<term>\)
 <app> ::= <atom>+
-<arrow> ::= <app> | <app>-><term>
+<arrow> ::= <app> | <app>-><type>
 <term> ::= <lam> | <pi> | <let> | <arrow>
 <type> ::= <term>
 トップレベル：
