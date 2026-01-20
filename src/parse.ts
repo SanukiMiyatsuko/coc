@@ -1,4 +1,4 @@
-import { type Term, sort, varia, lam, pi, letIn, app } from "./ast";
+import { type Term, sort, varia, lam, pi, pair, fst, snd, sig, letIn, app } from "./ast";
 import { type Result, succ, err, isErr } from "./result";
 import { type Context, ctxVar, ctxDef } from "./core";
 import { type TokenType, type Token, type Range } from "./tokenize";
@@ -6,8 +6,8 @@ import { type TokenType, type Token, type Range } from "./tokenize";
 type ParseError =
   | { tag: "UnexpectedToken"; expected: TokenType; actual: Token }
   | { tag: "ExpectedBinder"; token: Token }
-  | { tag: "ExpectedAtom"; token: Token }
   | { tag: "ExtraneousDef"; def: Term; range: Range }
+  | { tag: "ExpectedAtom"; token: Token }
   | { tag: "ExpectedDef"; range: Range };
 
 export type ParseNode = {
@@ -218,6 +218,52 @@ export class Parser {
     });
   }
 
+  private parsePair(): Result<Term, ParseError> {
+    return this.withNode("parsePair", () => {
+      const langle = this.expect("LANGLE");
+      if (isErr(langle))
+        return langle;
+      const first = this.parseTerm();
+      if (isErr(first))
+        return first;
+      const comma = this.expect("COMMA");
+      if (isErr(comma))
+        return comma;
+      const second = this.parseTerm();
+      if (isErr(second))
+        return second;
+      const rangle = this.expect("RANGLE");
+      if (isErr(rangle))
+        return rangle;
+      return succ(pair(first.value, second.value));
+    });
+  }
+
+  private parseSigma(): Result<Term, ParseError> {
+    return this.withNode("parseSigma", () => {
+      const res_exist = this.expect("RES_EXIST");
+      if (isErr(res_exist))
+        return res_exist;
+      const binder = this.parseBinder();
+      if (isErr(binder))
+        return binder;
+      const comma = this.expect("COMMA");
+      if (isErr(comma))
+        return comma;
+      const body = this.parseTerm();
+      if (isErr(body))
+        return body;
+      return succ(binder.value.reduceRight(
+        (acc, { names, type }) =>
+          names.reduceRight(
+            (acc2, name) => sig(name, type, acc2),
+            acc
+          ),
+        body.value
+      ));
+    });
+  }
+
   parseDef(): Result<GlobalDef, ParseError> {
     return this.withNode("parseDef", () => {
       const ident = this.expect("IDENT");
@@ -308,25 +354,48 @@ export class Parser {
           return rparen;
         return term;
       }
+      if (t.type === "LANGLE")
+        return this.parsePair();
       return err({ tag: "ExpectedAtom", token: t });
+    });
+  }
+
+  private parseProj(): Result<Term, ParseError> {
+    return this.withNode("parseProj", () => {
+      const atom = this.parseAtom();
+      if (isErr(atom))
+        return atom;
+      let cur = atom.value;
+      let token = this.peek();
+      while (token.type === "DOTONE"
+        || token.type === "DOTTWO") {
+        if (token.type === "DOTONE")
+          cur = fst(cur);
+        else
+          cur = snd(cur);
+        this.tokenPos += 1;
+        token = this.peek();
+      }
+      return succ(cur);
     });
   }
 
   private isAppStart(token: Token): boolean {
     return token.type === "RES_PROP"
       || token.type === "RES_TYPE"
+      || token.type === "IDENT"
       || token.type === "LPAREN"
-      || token.type === "IDENT";
+      || token.type === "LANGLE";
   }
 
   private parseApp(): Result<Term, ParseError> {
     return this.withNode("parseApp", () => {
-      const atom = this.parseAtom();
-      if (isErr(atom))
-        return atom;
-      let cur = atom.value;
+      const first = this.parseProj();
+      if (isErr(first))
+        return first;
+      let cur = first.value;
       while (this.isAppStart(this.peek())) {
-        const arg = this.parseAtom();
+        const arg = this.parseProj();
         if (isErr(arg))
           return arg;
         cur = app(cur, arg.value);
@@ -335,9 +404,25 @@ export class Parser {
     });
   }
 
+  private parseProd(): Result<Term, ParseError> {
+    return this.withNode("parseProd", () => {
+      const first = this.parseApp();
+      if (isErr(first))
+        return first;
+      let cur = first.value;
+      while (this.consume(this.peek(), "AND")) {
+        const body = this.parseApp();
+        if (isErr(body))
+          return body;
+        cur = sig("_", cur, body.value);
+      }
+      return succ(cur);
+    });
+  }
+
   private parseArrow(): Result<Term, ParseError> {
     return this.withNode("parseArrow", () => {
-      const left = this.parseApp();
+      const left = this.parseProd();
       if (isErr(left))
         return left;
       if (this.consume(this.peek(), "ARROW")) {
@@ -353,20 +438,20 @@ export class Parser {
   private parseTerm(): Result<Term, ParseError> {
     return this.withNode("parseTerm", () => {
       const t = this.peek();
-      if (t.type === "RES_FUN") {
+      if (t.type === "RES_FUN")
         return this.parseLam();
-      }
-      if (t.type === "RES_FORALL") {
+      if (t.type === "RES_FORALL")
         return this.parsePi();
-      }
-      if (t.type === "RES_LET") {
+      if (t.type === "RES_EXIST")
+        return this.parseSigma();
+      if (t.type === "RES_LET")
         return this.parseLet();
-      }
       return this.parseArrow();
     });
   }
 
   parseProgram(): Result<Context, ParseError> {
+    console.log(this.tokens);
     return this.withNode("parseProgram", () => {
       const defs: Context = [];
       while (this.peek().type !== "EOF") {

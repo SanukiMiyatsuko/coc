@@ -1,3 +1,4 @@
+BNF記法を用いる。
 空白はあってもなくても構わない。
 正規表現のメタ文字も利用する。
 
@@ -8,6 +9,7 @@ Prop
 Type
 fun
 forall
+exist
 let
 in
 
@@ -22,11 +24,15 @@ in
 <binder> ::= <open_binder> | <closed_binder>+
 <lam> ::= fun<binder>=><term>
 <pi> ::= forall<binder>,<type>
+<pair> ::= \<<term>,<term>\>
+<sigma> ::= exist<binder>,<type>
 <let> ::= let<ident><closed_binder>*:<type>:=<term>in<term>
-<atom> ::= <sort> | <variable> | \(<term>\)
-<app> ::= <atom>+
-<arrow> ::= <app> | <app>-><type>
-<term> ::= <lam> | <pi> | <let> | <arrow>
+<atom> ::= <sort> | <variable> | \(<term>\) | <pair>
+<proj> ::= <atom>(\.[01])*
+<app> ::= <app><proj> | <proj>
+<prod> ::= <prod>&<app> | <app>
+<array> ::= <prod>-><type> | <prod>
+<term> ::= <lam> | <pi> | <sigma> | <let> | <array>
 <type> ::= <term>
 トップレベル：
 <line_comment> ::= --[^\n]*(?:\n|$)

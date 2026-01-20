@@ -102,11 +102,11 @@ function buildDepGraph(
   return succ(graph);
 }
 
-function checkAcyclic(graph: DepGraph): Result<null, CtxError> {
+function checkAcyclic(graph: DepGraph): Result<true, CtxError> {
   const visited = new Set<Name>();
   const visiting = new Set<Name>();
   const stack: { from: Name; to: Name; kind: DepKind }[] = [];
-  function dfs(n: Name): Result<null, CtxError> {
+  const dfs = (n: Name): Result<true, CtxError> => {
     if (visiting.has(n)) {
       const i = stack.findIndex(e => e.from === n);
       return err({
@@ -115,7 +115,7 @@ function checkAcyclic(graph: DepGraph): Result<null, CtxError> {
       });
     }
     if (visited.has(n))
-      return succ(null);
+      return succ(true);
     visiting.add(n);
     for (const dep of graph.get(n)!) {
       stack.push({ from: n, to: dep.to, kind: dep.kind });
@@ -126,14 +126,14 @@ function checkAcyclic(graph: DepGraph): Result<null, CtxError> {
     }
     visiting.delete(n);
     visited.add(n);
-    return succ(null);
+    return succ(true);
   }
   for (const n of graph.keys()) {
     const r = dfs(n);
     if (isErr(r))
       return r;
   }
-  return succ(null);
+  return succ(true);
 }
 
 export function checkJudgContext(ctx: JudgContext): Result<true, CtxError> {

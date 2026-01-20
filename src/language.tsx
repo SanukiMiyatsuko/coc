@@ -7,7 +7,7 @@ const languageDefinition: monaco.languages.IMonarchLanguage = {
   ],
 
   expressionKeywords: [
-    'fun', 'forall', 'let', 'in'
+    'fun', 'forall', 'exist', 'let', 'in'
   ],
 
   typeKeywords: [
@@ -39,9 +39,10 @@ const languageDefinition: monaco.languages.IMonarchLanguage = {
 
       { include: '@whitespace' },
 
-      [/[()]/, '@brackets'],
+      [/[()<>]/, '@brackets'],
       [/[;,]/, 'delimiter'],
       [/:(?!=)/, 'delimiter'],
+      [/\.[01]/, 'operator'],
 
       [/@symbols/, {
         cases: {

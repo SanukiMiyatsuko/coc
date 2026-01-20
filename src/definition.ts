@@ -1,4 +1,4 @@
-import { type Name, type Term, varia, lam, pi, letIn, app } from "./ast";
+import { type Name, type Term, varia, lam, pi, pair, fst, snd, sig, letIn, app } from "./ast";
 
 export function freeVar(t: Term, acc: Set<Name> = new Set()): Set<Name> {
   switch (t.tag) {
@@ -10,8 +10,17 @@ export function freeVar(t: Term, acc: Set<Name> = new Set()): Set<Name> {
     }
     case "Lam":
     case "Pi":
+    case "Sig":
     case "Let":
       break;
+    case "Pair": {
+      freeVar(t.fst, acc);
+      freeVar(t.snd, acc);
+      return acc;
+    }
+    case "Fst":
+    case "Snd":
+      return freeVar(t.pair, acc);
     case "App": {
       freeVar(t.fun, acc);
       freeVar(t.arg, acc);
@@ -47,14 +56,23 @@ function substInter(t: Term, v: Name, u: Term, fu: Set<Name>): Term {
     case "Var":
       return t.name === v ? u : t;
     case "Lam":
-    case "Pi": {
+    case "Pi":
+    case "Sig": {
       const x = t.name;
       const pt = substInter(t.type, v, u, fu);
       if (x === v)
-        return t.tag === "Lam" ? lam(x, pt, t.body) : pi(x, pt, t.body);
+        return t.tag === "Lam"
+          ? lam(x, pt, t.body)
+          : t.tag === "Pi"
+            ? pi(x, pt, t.body)
+            : sig(x, pt, t.body);
       if (!fu.has(x)) {
         const body = substInter(t.body, v, u, fu);
-        return t.tag === "Lam" ? lam(x, pt, body) : pi(x, pt, body);
+        return t.tag === "Lam"
+          ? lam(x, pt, body)
+          : t.tag === "Pi"
+            ? pi(x, pt, body)
+            : sig(x, pt, body);
       }
       const used = new Set(fu);
       used.add(v);
@@ -62,8 +80,21 @@ function substInter(t: Term, v: Name, u: Term, fu: Set<Name>): Term {
       const y = freshName(x, used);
       const rename = substInter(t.body, x, varia(y), new Set([y]));
       const body = substInter(rename, v, u, fu);
-      return t.tag === "Lam" ? lam(y, pt, body) : pi(y, pt, body);
+      return t.tag === "Lam"
+        ? lam(y, pt, body)
+        : t.tag === "Pi"
+          ? pi(y, pt, body)
+          : sig(y, pt, body);
     }
+    case "Pair": {
+      const fun = substInter(t.fst, v, u, fu);
+      const arg = substInter(t.snd, v, u, fu);
+      return pair(fun, arg);
+    }
+    case "Fst":
+      return fst(substInter(t.pair, v, u, fu));
+    case "Snd":
+      return snd(substInter(t.pair, v, u, fu));
     case "Let": {
       const x = t.name;
       const pt = substInter(t.type, v, u, fu);
@@ -104,7 +135,8 @@ export function alphaEq(t: Term, u: Term): boolean {
     case "Var":
       return t.tag === u.tag && t.name === u.name;
     case "Lam":
-    case "Pi": {
+    case "Pi":
+    case "Sig": {
       if (t.tag !== u.tag)
         return false;
       const used = new Set([t.name, u.name]);
@@ -118,6 +150,14 @@ export function alphaEq(t: Term, u: Term): boolean {
           subst(u.body, u.name, newVar)
         );
     }
+    case "Pair":
+      return t.tag === u.tag
+        && alphaEq(t.fst, u.fst)
+        && alphaEq(t.snd, u.snd);
+    case "Fst":
+    case "Snd":
+      return t.tag === u.tag
+        && alphaEq(t.pair, u.pair);
     case "Let": {
       if (t.tag !== u.tag)
         return false;

@@ -16,6 +16,7 @@ export type TokenType =
   | "RES_TYPE"
   | "RES_FUN"
   | "RES_FORALL"
+  | "RES_EXIST"
   | "RES_LET"
   | "RES_IN"
   | "FAT_ARROW"
@@ -25,6 +26,11 @@ export type TokenType =
   | "RPAREN"
   | "COLON"
   | "COMMA"
+  | "LANGLE"
+  | "RANGLE"
+  | "DOTONE"
+  | "DOTTWO"
+  | "AND"
   | "SEMICOLON"
   | "IDENT"
   | "EOF"
@@ -46,6 +52,7 @@ const patterns: Pattern[] = [
   { type: "RES_TYPE", re: /^(Type)(?![\w'])/ },
   { type: "RES_FUN", re: /^(fun)(?![\w'])/ },
   { type: "RES_FORALL", re: /^(forall)(?![\w'])/ },
+  { type: "RES_EXIST", re: /^(exist)(?![\w'])/ },
   { type: "RES_LET", re: /^(let)(?![\w'])/ },
   { type: "RES_IN", re: /^(in)(?![\w'])/ },
   { type: "FAT_ARROW", re: /^=>/ },
@@ -55,6 +62,11 @@ const patterns: Pattern[] = [
   { type: "RPAREN", re: /^\)/ },
   { type: "COLON", re: /^:/ },
   { type: "COMMA", re: /^,/ },
+  { type: "LANGLE", re: /^</ },
+  { type: "RANGLE", re: /^>/ },
+  { type: "DOTONE", re: /^\.1/ },
+  { type: "DOTTWO", re: /^\.2/ },
+  { type: "AND", re: /^&/ },
   { type: "SEMICOLON", re: /^;/ },
   { type: "IDENT", re: /^[A-Za-z_][\w']*/ },
 ];

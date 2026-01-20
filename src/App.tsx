@@ -57,6 +57,14 @@ function showTerm(t: Term): string {
       return `(fun (${t.name} : ${showTerm(t.type)}) => ${showTerm(t.body)})`;
     case "Pi":
       return `(forall (${t.name} : ${showTerm(t.type)}), ${showTerm(t.body)})`;
+    case "Pair":
+      return `<${showTerm(t.fst)}, ${showTerm(t.snd)}>`;
+    case "Fst":
+      return `${showTerm(t.pair)}.1`;
+    case "Snd":
+      return `${showTerm(t.pair)}.2`;
+    case "Sig":
+      return `(exist (${t.name} : ${showTerm(t.type)}), ${showTerm(t.body)})`;
     case "Let":
       return `(let ${t.name} : ${showTerm(t.type)} := ${showTerm(t.def)} in ${showTerm(t.body)})`;
     case "App":
@@ -123,12 +131,11 @@ def iter : Nat -> forall (A : Prop), (A -> A) -> A -> A :=
 
 def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
   fun (n : Nat) (A : Prop) (a : A) (s : Nat -> A -> A) =>
-    let step : Prod Nat A -> Prod Nat A :=
-      fun p : Prod Nat A =>
-        pair Nat A
-          (succ (left Nat A p))
-          (s (left Nat A p) (right Nat A p)) in
-      right Nat A (n (Prod Nat A) step (pair Nat A zero a));
+    let step : Nat & A -> Nat & A :=
+      fun p : Nat & A =>
+        <succ p.1, s p.1 p.2> in
+      let init : Nat & A := <zero, a> in
+        (n (Nat & A) step init).2;
 
 
 def List (A: Prop): Prop :=
@@ -190,7 +197,14 @@ def symm (A: Prop) (a b: A): Eq A a b -> Eq A b a :=
 
 def trans (A: Prop) (a b c: A) : Eq A a b -> Eq A b c -> Eq A a c :=
   fun (eqab: Eq A a b) (eqbc: Eq A b c) (P: A -> Prop) (pa: P a) =>
-    eqbc P (eqab P pa);`
+    eqbc P (eqab P pa);
+
+def funEq (A B: Prop) (f g: A -> B): Prop := forall a: A, Eq B (f a) (g a);
+
+def FunEq (A B: Prop) (f g: A -> B): Prop := Eq (A -> B) f g;
+
+def F_to_f (A B: Prop) (f g: A -> B): FunEq A B f g -> funEq A B f g :=
+  fun (F: FunEq A B f g) (a: A) (R: B -> Prop) => F (fun h: A -> B => R (h a));`
 
 export default function App() {
   const [source, setSource] = useState(init);
@@ -232,11 +246,11 @@ export default function App() {
         case "ExpectedBinder":
           msg = `Binderが必要な位置です。 (実際に検出されたもの: ${ctxR.err.token.type})`;
           break;
-        case "ExpectedAtom":
-          msg = `Atomが必要な位置です。 (実際に検出されたもの: ${ctxR.err.token.type})`;
-          break;
         case "ExtraneousDef":
           msg = `不要な定義 ${showTerm(ctxR.err.def)} が検出されました。`;
+          break;
+        case "ExpectedAtom":
+          msg = `Atomが必要な位置です。 (実際に検出されたもの: ${ctxR.err.token.type})`;
           break;
         case "ExpectedDef":
           msg = `定義が必要な位置です。`;
@@ -307,8 +321,20 @@ export default function App() {
           msg = `Sort (Prop / Type) が期待されましたが、次の型でした: ${showTerm(wf.err.error.actual)}\n\n` +
             `参照元: ${showCtxElement(wf.err.at)}`;
           break;
+        case "ImpossibleCombination":
+          msg = `Sortの組み合わせが無効です:\nsort0 -> ${wf.err.error.sort0}\nsort1 -> ${wf.err.error.sort0}\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
         case "ExpectedPi":
-          msg = `${showTerm(wf.err.error.fun)}の型として関数型が期待されましたが、次の型でした: ${showTerm(wf.err.error.actual)}\n\n` +
+          msg = `${showTerm(wf.err.error.fun)}の型として関数型 (forall) が期待されましたが、次の型でした: ${showTerm(wf.err.error.actual)}\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "CannotInfer":
+          msg = `型を推論できない項${showTerm(wf.err.error.term)}が検出されました。\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "ExpectedSigma":
+          msg = `${showTerm(wf.err.error.pair)}の型として直積型 (exist) が期待されましたが、次の型でした: ${showTerm(wf.err.error.actual)}\n\n` +
             `参照元: ${showCtxElement(wf.err.at)}`;
           break;
         case "TypeMismatch":
