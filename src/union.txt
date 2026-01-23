@@ -1,0 +1,2078 @@
+ast.ts
+export type Sort = "Prop" | "Type";
+export type Name = string;
+export type Term = { tag: "Sort"; name: Sort }
+  | { tag: "Var"; name: Name }
+  | { tag: "Lam"; name: Name; type: Term; body: Term }
+  | { tag: "Pi"; name: Name; type: Term; body: Term }
+  | { tag: "Pair"; fst: Term; snd: Term; as?: Term }
+  | { tag: "Fst"; pair: Term }
+  | { tag: "Snd"; pair: Term }
+  | { tag: "Sig"; name: Name; type: Term; body: Term }
+  | { tag: "Let"; name: Name; type?: Term; def: Term; body: Term }
+  | { tag: "App"; fun: Term; arg: Term };
+
+export const sort = (name: Sort): Term => ({ tag: "Sort", name });
+export const varia = (name: Name): Term => ({ tag: "Var", name });
+export const lam = (name: Name, type: Term, body: Term): Term => ({ tag: "Lam", name, type, body });
+export const pi = (name: Name, type: Term, body: Term): Term => ({ tag: "Pi", name, type, body });
+export const pair = (fst: Term, snd: Term, as?: Term): Term => ({ tag: "Pair", fst, snd, as });
+export const fst = (pair: Term): Term => ({ tag: "Fst", pair });
+export const snd = (pair: Term): Term => ({ tag: "Snd", pair });
+export const sig = (name: Name, type: Term, body: Term): Term => ({ tag: "Sig", name, type, body });
+export const letIn = (name: Name, type: Term | undefined, def: Term, body: Term): Term => ({ tag: "Let", name, type, def, body });
+export const app = (fun: Term, arg: Term): Term => ({ tag: "App", fun, arg });
+
+result.ts
+export type Succ<A> = { tag: "succ"; value: A }
+export type Err<B> = { tag: "err"; err: B };
+export type Result<A, B> = Succ<A> | Err<B>
+
+export const succ = <A>(value: A): Succ<A> => ({ tag: "succ", value });
+export const err = <B>(err: B): Err<B> => ({ tag: "err", err });
+
+export const isSucc = <A, B>(vali: Result<A, B>): vali is Succ<A> => vali.tag === "succ";
+export const isErr = <A, B>(vali: Result<A, B>): vali is Err<B> => vali.tag === "err";
+
+core.ts
+import { type Name, type Term } from "./ast";
+
+type CtxVariable = { tag: "Var"; name: Name; type: Term };
+type CtxDefinition = { tag: "Def"; name: Name; type: Term; def: Term };
+export type CtxElement = CtxVariable | CtxDefinition;
+
+export type Context = CtxElement[];
+
+export const ctxVar = (name: Name, type: Term): CtxVariable => ({ tag: "Var", name, type });
+export const ctxDef = (name: Name, type: Term, def: Term): CtxDefinition => ({ tag: "Def", name, type, def });
+
+export type JudgContext = { global: Context; local: Context };
+
+export const judgCtx = (global: Context, local: Context): JudgContext => ({ global, local });
+
+export type Judgment = { tag: "nomal"; context: JudgContext; term: Term; type: Term }
+  | { tag: "WF"; context: JudgContext };
+
+tokenize.ts
+import { type Result, succ, err } from "./result";
+
+export type Position = { line: number; col: number };
+export type Range = { start: Position; end: Position };
+
+export type TokenizerError =
+  | { tag: "UnexpectedChar"; char: string; pos: Position }
+  | { tag: "UnclosedComment"; pos: Position };
+
+export type TokenType =
+  | "BLANKS"
+  | "COMMENT"
+  | "RES_DEF"
+  | "RES_VAR"
+  | "RES_PROP"
+  | "RES_TYPE"
+  | "RES_FUN"
+  | "RES_FORALL"
+  | "RES_EXIST"
+  | "RES_LET"
+  | "RES_IN"
+  | "FAT_ARROW"
+  | "ARROW"
+  | "ASSIGN"
+  | "LPAREN"
+  | "RPAREN"
+  | "COLON"
+  | "COMMA"
+  | "LANGLE"
+  | "RANGLE"
+  | "DOTONE"
+  | "DOTTWO"
+  | "AND"
+  | "SEMICOLON"
+  | "IDENT"
+  | "EOF"
+
+export type Token = {
+  type: TokenType;
+  value: string;
+  range: Range;
+};
+
+type Pattern = { type: TokenType; re: RegExp };
+
+const patterns: Pattern[] = [
+  { type: "BLANKS", re: /^\s+/ },
+  { type: "COMMENT", re: /^--[^\n]*(?:\n|$)/ },
+  { type: "RES_DEF", re: /^(def)(?![\w'])/ },
+  { type: "RES_VAR", re: /^(var)(?![\w'])/ },
+  { type: "RES_PROP", re: /^(Prop)(?![\w'])/ },
+  { type: "RES_TYPE", re: /^(Type)(?![\w'])/ },
+  { type: "RES_FUN", re: /^(fun)(?![\w'])/ },
+  { type: "RES_FORALL", re: /^(forall)(?![\w'])/ },
+  { type: "RES_EXIST", re: /^(exist)(?![\w'])/ },
+  { type: "RES_LET", re: /^(let)(?![\w'])/ },
+  { type: "RES_IN", re: /^(in)(?![\w'])/ },
+  { type: "FAT_ARROW", re: /^=>/ },
+  { type: "ARROW", re: /^->/ },
+  { type: "ASSIGN", re: /^:=/ },
+  { type: "LPAREN", re: /^\(/ },
+  { type: "RPAREN", re: /^\)/ },
+  { type: "COLON", re: /^:/ },
+  { type: "COMMA", re: /^,/ },
+  { type: "LANGLE", re: /^</ },
+  { type: "RANGLE", re: /^>/ },
+  { type: "DOTONE", re: /^\.1/ },
+  { type: "DOTTWO", re: /^\.2/ },
+  { type: "AND", re: /^&/ },
+  { type: "SEMICOLON", re: /^;/ },
+  { type: "IDENT", re: /^[A-Za-z_][\w']*/ },
+];
+
+export class Tokenizer {
+  private src: string;
+  private pos = 0;
+  private line = 1;
+  private col = 1;
+
+  constructor(src: string) {
+    this.src = src.replace(/\r\n|\r/g, "\n");
+  }
+
+  private eof(): boolean {
+    return this.pos >= this.src.length;
+  }
+
+  private advance(text: string) {
+    for (const ch of text) {
+      if (ch === "\n") {
+        this.line++;
+        this.col = 1;
+      } else {
+        this.col++;
+      }
+    }
+    this.pos += text.length;
+  }
+
+  private currentPosition(): Position {
+    return { line: this.line, col: this.col };
+  }
+
+  next(): Result<Token, TokenizerError> {
+    if (this.eof()) {
+      const p = this.currentPosition();
+      return succ({
+        type: "EOF",
+        value: "",
+        range: { start: p, end: p },
+      });
+    }
+    const rest = this.src.slice(this.pos);
+    if (rest.startsWith("{-")) {
+      const close_index = rest.indexOf("-}", 2);
+      if (close_index === -1)
+        return err({
+          tag: "UnclosedComment",
+          pos: this.currentPosition(),
+        });
+      const value = rest.slice(0, close_index + 2);
+      this.advance(value);
+      return this.next();
+    }
+    const start = this.currentPosition();
+    for (const { type, re } of patterns) {
+      const m = re.exec(rest);
+      if (!m)
+        continue;
+      const value = m[0];
+      this.advance(value);
+      if (type === "BLANKS" || type === "COMMENT")
+        return this.next();
+      const end = this.currentPosition();
+      return succ({
+        type,
+        value,
+        range: { start, end },
+      });
+    }
+    return err({
+      tag: "UnexpectedChar",
+      char: this.src[this.pos],
+      pos: this.currentPosition(),
+    });
+  }
+}
+
+parse.ts
+import { type Name, type Term, sort, varia, lam, pi, pair, fst, snd, sig, letIn, app } from "./ast";
+import { type Result, succ, err, isErr } from "./result";
+import { type Context, ctxVar, ctxDef } from "./core";
+import { type TokenizerError, type Tokenizer, type TokenType, type Token, type Position, type Range } from "./tokenize";
+
+type ParseError =
+  | { tag: "Tokenizer"; error: TokenizerError }
+  | { tag: "UnexpectedToken"; expected: TokenType; actual: Token }
+  | { tag: "ExpectedBinder"; token: Token }
+  | { tag: "ExtraneousDef"; def: Term; range: Range }
+  | { tag: "ExpectedAtom"; token: Token }
+  | { tag: "ExpectedDef"; range: Range };
+
+export type ParseNode = {
+  id: number;
+  label: string;
+  children: ParseNode[];
+  range?: Range;
+  status: "enter" | "success" | "error";
+  error?: ParseError;
+};
+
+export type BindersInfo = Map<Name, Range>;
+
+type GlobalDef = {
+  name: Name;
+  type: Term;
+  body?: {
+    term: Term;
+    range: Range;
+  };
+};
+
+export class Parser {
+  private tokenizer: Tokenizer;
+  private curr!: Token;
+  private prev!: Token;
+  private traceStack: ParseNode[] = [];
+  private root: ParseNode | null = null;
+  private nextNodeId = 0;
+  private binderInfos: BindersInfo = new Map();
+
+  constructor(tokenizer: Tokenizer) {
+    this.tokenizer = tokenizer;
+    this.advance();
+  }
+
+  getTrace(): ParseNode | null {
+    return this.root;
+  }
+
+  getAllBindersInfo(): BindersInfo {
+    return this.binderInfos;
+  }
+
+  private advance(): Result<void, ParseError> {
+    const res = this.tokenizer.next();
+    if (isErr(res)) {
+      return err({ tag: "Tokenizer", error: res.err });
+    }
+    this.prev = this.curr;
+    this.curr = res.value;
+    return succ(undefined);
+  }
+
+  private withNode<T>(
+    label: string,
+    fn: () => Result<T, ParseError>
+  ): Result<T, ParseError> {
+    const startToken = this.curr;
+    const node: ParseNode = {
+      id: this.nextNodeId++,
+      label,
+      children: [],
+      status: "enter",
+    };
+    if (this.traceStack.length === 0) {
+      this.root = node;
+    } else {
+      this.traceStack[this.traceStack.length - 1].children.push(node);
+    }
+    this.traceStack.push(node);
+    const result = fn();
+    this.traceStack.pop();
+    const maybeEndToken = this.prev ?? startToken;
+    node.range = {
+      start: startToken.range.start,
+      end: maybeEndToken.range.end,
+    };
+    if (isErr(result)) {
+      node.status = "error";
+      node.error = result.err;
+      return result;
+    }
+    node.status = "success";
+    return result;
+  }
+
+  private expect(type: TokenType): Result<Token, ParseError> {
+    const t = this.curr;
+    if (t.type !== type)
+      return err({
+        tag: "UnexpectedToken",
+        expected: type,
+        actual: t,
+      });
+    const adv = this.advance();
+    if (isErr(adv))
+      return adv;
+    return succ(t);
+  }
+
+  private parseOpenBinder(): Result<{ names: string[]; type: Term; start: Position }, ParseError> {
+    return this.withNode("parseOpenBinder", () => {
+      const name = this.expect("IDENT");
+      if (isErr(name))
+        return name;
+      const names = [name.value.value];
+      let cur = this.curr;
+      while (cur.type === "IDENT") {
+        names.push(cur.value);
+        const adv = this.advance();
+        if (isErr(adv))
+          return adv;
+        cur = this.curr;
+      }
+      const colon = this.expect("COLON");
+      if (isErr(colon))
+        return colon;
+      const type = this.parseTerm();
+      if (isErr(type))
+        return type;
+      return succ({ names, type: type.value, start: name.value.range.start });
+    });
+  }
+
+  private parseClosedBinder(): Result<{ names: string[]; type: Term; start: Position }, ParseError> {
+    return this.withNode("parseClosedBinder", () => {
+      const lparen = this.expect("LPAREN");
+      if (isErr(lparen))
+        return lparen;
+      const open_binder = this.parseOpenBinder();
+      if (isErr(open_binder))
+        return open_binder;
+      const rparen = this.expect("RPAREN");
+      if (isErr(rparen))
+        return rparen;
+      return succ(open_binder.value);
+    });
+  }
+
+  private parseBinder(): Result<{ names: string[]; type: Term; start: Position }[], ParseError> {
+    return this.withNode("parseBinder", () => {
+      const t = this.curr;
+      if (t.type === "IDENT") {
+        const open_binder = this.parseOpenBinder();
+        if (isErr(open_binder))
+          return open_binder;
+        return succ([open_binder.value]);
+      }
+      if (t.type === "LPAREN") {
+        const binder = this.parseClosedBinder();
+        if (isErr(binder))
+          return binder;
+        const binders = [binder.value];
+        let cur = this.curr;
+        while (cur.type === "LPAREN") {
+          const b = this.parseClosedBinder();
+          if (isErr(b))
+            return b;
+          binders.push(b.value);
+          cur = this.curr;
+        }
+        return succ(binders);
+      }
+      return err({ tag: "ExpectedBinder", token: t });
+    });
+  }
+
+  private parseLam(): Result<Term, ParseError> {
+    return this.withNode("parseLam", () => {
+      const res_fun = this.expect("RES_FUN");
+      if (isErr(res_fun))
+        return res_fun;
+      const binder = this.parseBinder();
+      if (isErr(binder))
+        return binder;
+      const fat_arrow = this.expect("FAT_ARROW");
+      if (isErr(fat_arrow))
+        return fat_arrow;
+      const body = this.parseTerm();
+      if (isErr(body))
+        return body;
+      const end = this.prev.range.end;
+      for (const { names, start } of binder.value) {
+        for (const name of names) {
+          this.binderInfos.set(name, { start, end });
+        }
+      }
+      return succ(binder.value.reduceRight(
+        (acc, { names, type }) =>
+          names.reduceRight(
+            (acc2, name) => lam(name, type, acc2),
+            acc
+          ),
+        body.value
+      ));
+    });
+  }
+
+  private parsePi(): Result<Term, ParseError> {
+    return this.withNode("parsePi", () => {
+      const res_forall = this.expect("RES_FORALL");
+      if (isErr(res_forall))
+        return res_forall;
+      const binder = this.parseBinder();
+      if (isErr(binder))
+        return binder;
+      const comma = this.expect("COMMA");
+      if (isErr(comma))
+        return comma;
+      const body = this.parseTerm();
+      if (isErr(body))
+        return body;
+      const end = this.prev.range.end;
+      for (const { names, start } of binder.value) {
+        for (const name of names) {
+          this.binderInfos.set(name, { start, end });
+        }
+      }
+      return succ(binder.value.reduceRight(
+        (acc, { names, type }) =>
+          names.reduceRight(
+            (acc2, name) => pi(name, type, acc2),
+            acc
+          ),
+        body.value
+      ));
+    });
+  }
+
+  private parsePair(): Result<Term, ParseError> {
+    return this.withNode("parsePair", () => {
+      const langle = this.expect("LANGLE");
+      if (isErr(langle))
+        return langle;
+      const first = this.parseTerm();
+      if (isErr(first))
+        return first;
+      const comma = this.expect("COMMA");
+      if (isErr(comma))
+        return comma;
+      const second = this.parseTerm();
+      if (isErr(second))
+        return second;
+      const rangle = this.expect("RANGLE");
+      if (isErr(rangle))
+        return rangle;
+      let type: Term | undefined = undefined;
+      if (this.curr.type === "COLON") {
+        const adv = this.advance();
+        if (isErr(adv))
+          return adv;
+        const assertion = this.parseTerm();
+        if (isErr(assertion))
+          return assertion;
+        type = assertion.value;
+      }
+      return succ(pair(first.value, second.value, type));
+    });
+  }
+
+  private parseSigma(): Result<Term, ParseError> {
+    return this.withNode("parseSigma", () => {
+      const res_exist = this.expect("RES_EXIST");
+      if (isErr(res_exist))
+        return res_exist;
+      const binder = this.parseBinder();
+      if (isErr(binder))
+        return binder;
+      const comma = this.expect("COMMA");
+      if (isErr(comma))
+        return comma;
+      const body = this.parseTerm();
+      if (isErr(body))
+        return body;
+      const end = this.prev.range.end;
+      for (const { names, start } of binder.value) {
+        for (const name of names) {
+          this.binderInfos.set(name, { start, end });
+        }
+      }
+      return succ(binder.value.reduceRight(
+        (acc, { names, type }) =>
+          names.reduceRight(
+            (acc2, name) => sig(name, type, acc2),
+            acc
+          ),
+        body.value
+      ));
+    });
+  }
+
+  private parseDef(): Result<GlobalDef, ParseError> {
+    return this.withNode("parseDef", () => {
+      const ident = this.expect("IDENT");
+      if (isErr(ident))
+        return ident;
+      const name = ident.value.value;
+      const binders = [];
+      let cur = this.curr;
+      while (cur.type === "LPAREN") {
+        const b = this.parseClosedBinder();
+        if (isErr(b))
+          return b;
+        binders.push(b.value);
+        cur = this.curr;
+      }
+      const colon = this.expect("COLON");
+      if (isErr(colon))
+        return colon;
+      const type = this.parseTerm();
+      if (isErr(type))
+        return type;
+      const endPi = this.prev.range.end;
+      for (const { names, start } of binders) {
+        for (const name of names) {
+          this.binderInfos.set(name, { start, end: endPi });
+        }
+      }
+      const typePi = binders.reduceRight(
+        (acc, { names, type }) =>
+          names.reduceRight(
+            (acc2, name) => pi(name, type, acc2),
+            acc
+          ),
+        type.value
+      );
+      let bodyObject: { term: Term; range: Range } | undefined = undefined;
+      if (this.curr.type === "ASSIGN") {
+        const adv = this.advance();
+        if (isErr(adv))
+          return adv;
+        const startLam = this.curr.range.start;
+        const body = this.parseTerm();
+        if (isErr(body))
+          return body;
+        const endLam = this.prev.range.end;
+        for (const { names, start } of binders) {
+          for (const name of names) {
+            this.binderInfos.set(name, { start, end: endLam });
+          }
+        }
+        const term = binders.reduceRight(
+          (acc, { names, type }) =>
+            names.reduceRight(
+              (acc2, name) => lam(name, type, acc2),
+              acc
+            ),
+          body.value
+        );
+        bodyObject = { term, range: { start: startLam, end: endLam } };
+      }
+      return succ({ name, type: typePi, body: bodyObject });
+    });
+  }
+
+  private parseLet(): Result<Term, ParseError> {
+    return this.withNode("parseLet", () => {
+      const res_let = this.expect("RES_LET");
+      if (isErr(res_let))
+        return res_let;
+      const ident = this.expect("IDENT");
+      if (isErr(ident))
+        return ident;
+      const name = ident.value.value;
+      const binders = [];
+      let cur = this.curr;
+      while (cur.type === "LPAREN") {
+        const b = this.parseClosedBinder();
+        if (isErr(b))
+          return b;
+        binders.push(b.value);
+        cur = this.curr;
+      }
+      let typePi: Term | undefined = undefined;
+      if (this.curr.type === "COLON") {
+        const adv = this.advance();
+        if (isErr(adv))
+          return adv;
+        const type = this.parseTerm();
+        if (isErr(type))
+          return type;
+        const endPi = this.prev.range.end;
+        for (const { names, start } of binders) {
+          for (const name of names) {
+            this.binderInfos.set(name, { start, end: endPi });
+          }
+        }
+        typePi = binders.reduceRight(
+          (acc, { names, type }) =>
+            names.reduceRight(
+              (acc2, name) => pi(name, type, acc2),
+              acc
+            ),
+          type.value
+        );
+      }
+      const assign = this.expect("ASSIGN");
+      if (isErr(assign))
+        return assign;
+      const def = this.parseTerm();
+      if (isErr(def))
+        return def;
+      const endLam = this.prev.range.end;
+      for (const { names, start } of binders) {
+        for (const name of names) {
+          this.binderInfos.set(name, { start, end: endLam });
+        }
+      }
+      const defLam = binders.reduceRight(
+        (acc, { names, type }) =>
+          names.reduceRight(
+            (acc2, name) => lam(name, type, acc2),
+            acc
+          ),
+        def.value
+      );
+      const res_in = this.expect("RES_IN");
+      if (isErr(res_in))
+        return res_in;
+      const start = this.curr.range.start;
+      const body = this.parseTerm();
+      if (isErr(body))
+        return body;
+      const end = this.prev.range.end;
+      this.binderInfos.set(name, { start, end });
+      return succ(letIn(name, typePi, defLam, body.value));
+    });
+  }
+
+  private parseAtom(): Result<Term, ParseError> {
+    return this.withNode("parseAtom", () => {
+      const t = this.curr;
+      if (t.type === "LANGLE")
+        return this.parsePair();
+      const adv = this.advance();
+      if (isErr(adv))
+        return adv;
+      if (t.type === "RES_PROP")
+        return succ(sort("Prop"));
+      if (t.type === "RES_TYPE")
+        return succ(sort("Type"));
+      if (t.type === "IDENT")
+        return succ(varia(t.value));
+      if (t.type === "LPAREN") {
+        const term = this.parseTerm();
+        if (isErr(term))
+          return term;
+        const rparen = this.expect("RPAREN");
+        if (isErr(rparen))
+          return rparen;
+        return term;
+      }
+      return err({ tag: "ExpectedAtom", token: t });
+    });
+  }
+
+  private parseProj(): Result<Term, ParseError> {
+    return this.withNode("parseProj", () => {
+      const atom = this.parseAtom();
+      if (isErr(atom))
+        return atom;
+      let cur = atom.value;
+      let token = this.curr;
+      while (token.type === "DOTONE"
+        || token.type === "DOTTWO") {
+        if (token.type === "DOTONE")
+          cur = fst(cur);
+        else
+          cur = snd(cur);
+        const adv = this.advance();
+        if (isErr(adv))
+          return adv;
+        token = this.curr;
+      }
+      return succ(cur);
+    });
+  }
+
+  private isAppStart(token: Token): boolean {
+    return token.type === "RES_PROP"
+      || token.type === "RES_TYPE"
+      || token.type === "IDENT"
+      || token.type === "LPAREN"
+      || token.type === "LANGLE";
+  }
+
+  private parseApp(): Result<Term, ParseError> {
+    return this.withNode("parseApp", () => {
+      const first = this.parseProj();
+      if (isErr(first))
+        return first;
+      let cur = first.value;
+      while (this.isAppStart(this.curr)) {
+        const arg = this.parseProj();
+        if (isErr(arg))
+          return arg;
+        cur = app(cur, arg.value);
+      }
+      return succ(cur);
+    });
+  }
+
+  private parseProd(): Result<Term, ParseError> {
+    return this.withNode("parseProd", () => {
+      const first = this.parseApp();
+      if (isErr(first))
+        return first;
+      let cur = first.value;
+      while (this.curr.type === "AND") {
+        const adv = this.advance();
+        if (isErr(adv))
+          return adv;
+        const body = this.parseApp();
+        if (isErr(body))
+          return body;
+        cur = sig("_", cur, body.value);
+      }
+      return succ(cur);
+    });
+  }
+
+  private parseArrow(): Result<Term, ParseError> {
+    return this.withNode("parseArrow", () => {
+      const left = this.parseProd();
+      if (isErr(left))
+        return left;
+      if (this.curr.type === "ARROW") {
+        const adv = this.advance();
+        if (isErr(adv))
+          return adv;
+        const right = this.parseTerm();
+        if (isErr(right))
+          return right;
+        return succ(pi("_", left.value, right.value));
+      }
+      return left;
+    });
+  }
+
+  private parseTerm(): Result<Term, ParseError> {
+    return this.withNode("parseTerm", () => {
+      const t = this.curr;
+      if (t.type === "RES_FUN")
+        return this.parseLam();
+      if (t.type === "RES_FORALL")
+        return this.parsePi();
+      if (t.type === "RES_EXIST")
+        return this.parseSigma();
+      if (t.type === "RES_LET")
+        return this.parseLet();
+      return this.parseArrow();
+    });
+  }
+
+  parseProgram(): Result<Context, ParseError> {
+    return this.withNode("parseProgram", () => {
+      const defs: Context = [];
+      while (this.curr.type !== "EOF") {
+        if (this.curr.type === "RES_DEF") {
+          const adv = this.advance();
+          if (isErr(adv))
+            return adv;
+          const global = this.parseDef();
+          if (isErr(global))
+            return global;
+          const parsed = global.value;
+          if (!parsed.body) {
+            const t = this.prev;
+            return err({ tag: "ExpectedDef", range: t.range });
+          }
+          defs.push(ctxDef(parsed.name, parsed.type, parsed.body.term));
+        } else {
+          const res_var = this.expect("RES_VAR");
+          if (isErr(res_var))
+            return res_var;
+          const global = this.parseDef();
+          if (isErr(global))
+            return global;
+          const parsed = global.value;
+          if (parsed.body)
+            return err({ tag: "ExtraneousDef", def: parsed.body.term, range: parsed.body.range });
+          defs.push(ctxVar(parsed.name, parsed.type));
+        }
+        const semicolon = this.expect("SEMICOLON");
+        if (isErr(semicolon))
+          return semicolon;
+      }
+      return succ(defs);
+    });
+  }
+}
+
+definition.ts
+import { type Name, type Term, varia, lam, pi, pair, fst, snd, sig, letIn, app } from "./ast";
+
+export function freeVar(t: Term, acc: Set<Name> = new Set()): Set<Name> {
+  switch (t.tag) {
+    case "Sort":
+      return acc;
+    case "Var": {
+      acc.add(t.name);
+      return acc;
+    }
+    case "Lam":
+    case "Pi":
+    case "Sig":
+    case "Let":
+      break;
+    case "Pair": {
+      freeVar(t.fst, acc);
+      freeVar(t.snd, acc);
+      if (t.as)
+        freeVar(t.as, acc);
+      return acc;
+    }
+    case "Fst":
+    case "Snd":
+      return freeVar(t.pair, acc);
+    case "App": {
+      freeVar(t.fun, acc);
+      freeVar(t.arg, acc);
+      return acc;
+    }
+  }
+  if (t.type)
+    freeVar(t.type, acc);
+  if (t.tag === "Let")
+    freeVar(t.def, acc);
+  const bf = freeVar(t.body);
+  bf.delete(t.name);
+  bf.forEach(v => acc.add(v));
+  return acc;
+}
+
+function freshName(base: Name, used: Set<Name> = new Set()): Name {
+  if (!used.has(base)) return base;
+  const match = base.match(/_(\d+)$/);
+  let i = match ? Number(match[1]) + 1 : 0;
+  const sliced = match ? base.slice(0, match.index) : base;
+  let cand: Name;
+  do {
+    cand = `${sliced}_${i}`;
+    i += 1;
+  } while (used.has(cand));
+  return cand;
+}
+
+function substInter(t: Term, v: Name, u: Term, fu: Set<Name>): Term {
+  switch (t.tag) {
+    case "Sort":
+      return t;
+    case "Var":
+      return t.name === v ? u : t;
+    case "Lam":
+    case "Pi":
+    case "Sig": {
+      const x = t.name;
+      const pt = substInter(t.type, v, u, fu);
+      if (x === v)
+        return t.tag === "Lam"
+          ? lam(x, pt, t.body)
+          : t.tag === "Pi"
+            ? pi(x, pt, t.body)
+            : sig(x, pt, t.body);
+      if (!fu.has(x)) {
+        const body = substInter(t.body, v, u, fu);
+        return t.tag === "Lam"
+          ? lam(x, pt, body)
+          : t.tag === "Pi"
+            ? pi(x, pt, body)
+            : sig(x, pt, body);
+      }
+      const used = new Set(fu);
+      used.add(v);
+      freeVar(t, used);
+      const y = freshName(x, used);
+      const rename = substInter(t.body, x, varia(y), new Set([y]));
+      const body = substInter(rename, v, u, fu);
+      return t.tag === "Lam"
+        ? lam(y, pt, body)
+        : t.tag === "Pi"
+          ? pi(y, pt, body)
+          : sig(y, pt, body);
+    }
+    case "Pair": {
+      const fun = substInter(t.fst, v, u, fu);
+      const arg = substInter(t.snd, v, u, fu);
+      let type = undefined;
+      if (t.as)
+        type = substInter(t.as, v, u, fu);
+      return pair(fun, arg, type);
+    }
+    case "Fst":
+      return fst(substInter(t.pair, v, u, fu));
+    case "Snd":
+      return snd(substInter(t.pair, v, u, fu));
+    case "Let": {
+      const x = t.name;
+      const pt = t.type ? substInter(t.type, v, u, fu) : undefined;
+      const def = substInter(t.def, v, u, fu);
+      if (x === v)
+        return letIn(x, pt, def!, t.body);
+      if (!fu.has(x)) {
+        const body = substInter(t.body, v, u, fu);
+        return letIn(x, pt, def!, body);
+      }
+      const used = new Set(fu);
+      used.add(v);
+      freeVar(t, used);
+      const y = freshName(x, used);
+      const rename = substInter(t.body, x, varia(y), new Set([y]));
+      const body = substInter(rename, v, u, fu);
+      return letIn(y, pt, def, body);
+    }
+    case "App": {
+      const fun = substInter(t.fun, v, u, fu);
+      const arg = substInter(t.arg, v, u, fu);
+      return app(fun, arg);
+    }
+  }
+}
+
+export function subst(t: Term, v: Name, u: Term): Term {
+  const ft = freeVar(t);
+  if (!ft.has(v))
+    return t;
+  const fu = freeVar(u);
+  return substInter(t, v, u, fu);
+}
+
+export function alphaEq(t: Term, u: Term): boolean {
+  switch (t.tag) {
+    case "Sort":
+    case "Var":
+      return t.tag === u.tag
+        && t.name === u.name;
+    case "Lam":
+    case "Pi":
+    case "Sig": {
+      if (t.tag !== u.tag)
+        return false;
+      const used = new Set([t.name, u.name]);
+      freeVar(t.body, used);
+      freeVar(u.body, used);
+      const fresh = freshName(t.name, used);
+      const newVar = varia(fresh);
+      return alphaEq(t.type, u.type)
+        && alphaEq(
+          subst(t.body, t.name, newVar),
+          subst(u.body, u.name, newVar)
+        );
+    }
+    case "Pair": {
+      if (t.tag !== u.tag)
+        return false;
+      if (!alphaEq(t.fst, u.fst))
+        return false;
+      if (!alphaEq(t.snd, u.snd))
+        return false;
+      if (t.as === undefined && u.as === undefined)
+        return true;
+      if (t.as === undefined || u.as === undefined)
+        return false;
+      return alphaEq(t.as, u.as);
+    }
+    case "Fst":
+    case "Snd":
+      return t.tag === u.tag
+        && alphaEq(t.pair, u.pair);
+    case "Let": {
+      if (t.tag !== u.tag)
+        return false;
+      const used = new Set([t.name, u.name]);
+      freeVar(t.body, used);
+      freeVar(u.body, used);
+      const fresh = freshName(t.name, used);
+      const newVar = varia(fresh);
+      const subt = subst(t.body, t.name, newVar);
+      const subu = subst(u.body, u.name, newVar);
+      if (!alphaEq(t.def, u.def))
+        return false;
+      if (!alphaEq(subt, subu))
+        return false;
+      if (t.type === undefined && u.type === undefined)
+        return true;
+      if (t.type === undefined || u.type === undefined)
+        return false;
+      return alphaEq(t.type, u.type);
+    }
+    case "App":
+      return t.tag === u.tag
+        && alphaEq(t.fun, u.fun)
+        && alphaEq(t.arg, u.arg);
+  }
+}
+
+context.ts
+import { type Name } from "./ast";
+import { type Result, succ, err, isErr } from "./result";
+import { type CtxElement, type JudgContext } from "./core";
+import { freeVar } from "./definition";
+
+type DepKind = "type" | "def";
+
+type CtxError =
+  | { tag: "DuplicateGlobal"; name: Name }
+  | { tag: "DuplicateLocal"; name: Name }
+  | { tag: "SelfReference"; name: Name; kind: DepKind }
+  | { tag: "GlobalDependsOnLocal"; from: Name; to: Name; kind: DepKind }
+  | { tag: "ForwardDependency"; from: Name; to: Name; kind: DepKind }
+  | { tag: "Undefined"; name: Name; in: Name; kind: DepKind }
+  | { tag: "Cycle"; path: { from: Name; to: Name; kind: DepKind }[] };
+
+type Dependency = { to: Name; kind: DepKind };
+
+type DefInfo = { isGlobal: boolean; index: number };
+type MapDefInfo = Map<Name, DefInfo>;
+
+type DepGraph = Map<Name, Dependency[]>;
+
+function depsOf(e: CtxElement): Dependency[] {
+  const deps: Dependency[] = [];
+  for (const v of freeVar(e.type)) {
+    deps.push({ to: v, kind: "type" });
+  }
+  if (e.tag === "Def")
+    for (const v of freeVar(e.def)) {
+      deps.push({ to: v, kind: "def" });
+    }
+  return deps;
+}
+
+function buildDefInfo(ctx: JudgContext): Result<MapDefInfo, CtxError> {
+  const info: MapDefInfo = new Map();
+  let index = 0;
+  for (const e of ctx.global) {
+    if (info.has(e.name))
+      return err({ tag: "DuplicateGlobal", name: e.name });
+    info.set(e.name, { isGlobal: true, index: index++ });
+  }
+  for (const e of ctx.local) {
+    const prev = info.get(e.name);
+    if (prev && !prev.isGlobal)
+      return err({ tag: "DuplicateLocal", name: e.name });
+    info.set(e.name, { isGlobal: false, index: index++ });
+  }
+  return succ(info);
+}
+
+function checkDepPolicy(
+  from: Name,
+  dep: Dependency,
+  info: MapDefInfo
+): Result<null, CtxError> {
+  if (dep.to === from)
+    return err({ tag: "SelfReference", name: from, kind: dep.kind });
+  const f = info.get(from)!;
+  const t = info.get(dep.to)!;
+  if (f.isGlobal && !t.isGlobal)
+    return err({
+      tag: "GlobalDependsOnLocal",
+      from,
+      to: dep.to,
+      kind: dep.kind,
+    });
+  if (t.index >= f.index)
+    return err({
+      tag: "ForwardDependency",
+      from,
+      to: dep.to,
+      kind: dep.kind,
+    });
+  return succ(null);
+}
+
+function buildDepGraph(
+  ctx: JudgContext,
+  info: MapDefInfo
+): Result<DepGraph, CtxError> {
+  const graph: DepGraph = new Map();
+  const all = [...ctx.global, ...ctx.local];
+  for (const e of all)
+    graph.set(e.name, []);
+  for (const e of all) {
+    for (const dep of depsOf(e)) {
+      if (!info.has(dep.to))
+        return err({
+          tag: "Undefined",
+          name: dep.to,
+          in: e.name,
+          kind: dep.kind,
+        });
+      const r = checkDepPolicy(e.name, dep, info);
+      if (isErr(r))
+        return r;
+      graph.get(e.name)!.push(dep);
+    }
+  }
+  return succ(graph);
+}
+
+function checkAcyclic(graph: DepGraph): Result<true, CtxError> {
+  const visited = new Set<Name>();
+  const visiting = new Set<Name>();
+  const stack: { from: Name; to: Name; kind: DepKind }[] = [];
+  const dfs = (n: Name): Result<true, CtxError> => {
+    if (visiting.has(n)) {
+      const i = stack.findIndex(e => e.from === n);
+      return err({
+        tag: "Cycle",
+        path: stack.slice(i),
+      });
+    }
+    if (visited.has(n))
+      return succ(true);
+    visiting.add(n);
+    for (const dep of graph.get(n)!) {
+      stack.push({ from: n, to: dep.to, kind: dep.kind });
+      const r = dfs(dep.to);
+      if (isErr(r))
+        return r;
+      stack.pop();
+    }
+    visiting.delete(n);
+    visited.add(n);
+    return succ(true);
+  }
+  for (const n of graph.keys()) {
+    const r = dfs(n);
+    if (isErr(r))
+      return r;
+  }
+  return succ(true);
+}
+
+export function checkJudgContext(ctx: JudgContext): Result<true, CtxError> {
+  const infoR = buildDefInfo(ctx);
+  if (isErr(infoR))
+    return infoR;
+  const graphR = buildDepGraph(ctx, infoR.value);
+  if (isErr(graphR))
+    return graphR;
+  const acyclicR = checkAcyclic(graphR.value);
+  if (isErr(acyclicR))
+    return acyclicR;
+  return succ(true);
+}
+
+typecheck.ts
+import { type Sort, type Name, type Term, sort, lam, pi, pair, fst, snd, sig, letIn, app, varia } from "./ast";
+import { type Result, succ, err, isErr } from "./result";
+import { type CtxElement, type Context, ctxVar, ctxDef, type JudgContext, judgCtx } from "./core";
+import { subst, alphaEq } from "./definition";
+
+type TypeError =
+  | { tag: "TypeHasNoType" }
+  | { tag: "UnboundVariable"; name: Name }
+  | { tag: "ExpectedSort"; actual: Term }
+  | { tag: "ImpossibleCombination", sort0: Sort, sort1: Sort }
+  | { tag: "ExpectedPi"; fun: Term; actual: Term }
+  | { tag: "ExpectedSigma"; pair: Term; actual: Term }
+  | { tag: "TypeMismatch"; expected: Term; actual: Term };
+
+type WFError = { error: TypeError; at: CtxElement };
+
+function dszNF(jc: JudgContext, t: Term): Term {
+  switch (t.tag) {
+    case "Sort":
+      return t;
+    case "Var": {
+      const le = jc.local.slice().reverse().find(e => e.name === t.name);
+      if (le && le.tag === "Def")
+        return dszNF(jc, le.def);
+      const ge = jc.global.slice().reverse().find(e => e.name === t.name);
+      if (ge && ge.tag === "Def")
+        return dszNF(jc, ge.def);
+      return t;
+    }
+    case "Lam":
+      return lam(t.name, dszNF(jc, t.type), dszNF(jc, t.body));
+    case "Pi":
+      return pi(t.name, dszNF(jc, t.type), dszNF(jc, t.body));
+    case "Pair":
+      return pair(dszNF(jc, t.fst), dszNF(jc, t.snd), t.as ? dszNF(jc, t.as) : undefined);
+    case "Fst": {
+      if (t.pair.tag === "Pair")
+        return dszNF(jc, t.pair.fst);
+      return fst(dszNF(jc, t.pair));
+    }
+    case "Snd": {
+      if (t.pair.tag === "Pair")
+        return dszNF(jc, t.pair.snd);
+      return snd(dszNF(jc, t.pair));
+    }
+    case "Sig":
+      return sig(t.name, dszNF(jc, t.type), dszNF(jc, t.body));
+    case "Let":
+      return dszNF(jc, subst(t.body, t.name, t.def));
+    case "App":
+      return app(dszNF(jc, t.fun), dszNF(jc, t.arg));
+  }
+}
+
+function headNF(t: Term): Term {
+  switch (t.tag) {
+    case "Sort":
+    case "Var":
+    case "Lam":
+      return t;
+    case "Pi":
+      return pi(t.name, headNF(t.type), headNF(t.body));
+    case "Pair":
+      return pair(headNF(t.fst), headNF(t.snd), t.as ? headNF(t.as) : undefined);
+    case "Fst":
+      return fst(headNF(t.pair));
+    case "Snd":
+      return snd(headNF(t.pair));
+    case "Sig":
+      return sig(t.name, headNF(t.type), headNF(t.body));
+    case "Let":
+      return letIn(t.name, t.type ? headNF(t.type) : undefined, headNF(t.def), headNF(t.body));
+    case "App": {
+      const fun = headNF(t.fun);
+      if (fun.tag === "Lam")
+        return headNF(subst(fun.body, fun.name, t.arg));
+      return app(fun, t.arg);
+    }
+  }
+}
+
+function ahEq(jc: JudgContext, t: Term, u: Term): boolean {
+  const tWhnf = headNF(dszNF(jc, t));
+  const uWhnf = headNF(dszNF(jc, u));
+  if (tWhnf.tag === "Lam") {
+    const tname = tWhnf.name;
+    const tbody = tWhnf.body;
+    const local = jc.local.slice();
+    local.push(ctxVar(tname, tWhnf.type));
+    return ahEq(judgCtx(jc.global, local), tbody, app(uWhnf, varia(tname)));
+  }
+  if (uWhnf.tag === "Lam") {
+    const uname = uWhnf.name;
+    const ubody = uWhnf.body;
+    const local = jc.local.slice();
+    local.push(ctxVar(uname, uWhnf.type));
+    return ahEq(judgCtx(jc.global, local), app(tWhnf, varia(uname)), ubody);
+  }
+  return alphaEq(tWhnf, uWhnf);
+}
+
+export function wellFormed(jc: JudgContext): Result<true, WFError> {
+  const g: Context = [];
+  const l: Context = [];
+  const check = (ctx: JudgContext, e: CtxElement): Result<true, WFError> => {
+    if (e.tag === "Var") {
+      const r = typeInfer(ctx, e.type);
+      if (isErr(r))
+        return err({ error: r.err, at: e });
+      if (r.value.tag !== "Sort")
+        return err({
+          error: { tag: "ExpectedSort", actual: r.value },
+          at: e,
+        });
+      return succ(true);
+    } else {
+      const r = typeCheck(ctx, e.def, e.type);
+      if (isErr(r))
+        return err({ error: r.err, at: e });
+      return succ(true);
+    }
+  };
+  for (const e of jc.global) {
+    const r = check(judgCtx(g, l), e);
+    if (isErr(r))
+      return r;
+    g.push(e);
+  }
+  for (const e of jc.local) {
+    const r = check(judgCtx(g, l), e);
+    if (isErr(r))
+      return r;
+    l.push(e);
+  }
+  return succ(true);
+}
+
+function typeInfer(jc: JudgContext, t: Term): Result<Term, TypeError> {
+  switch (t.tag) {
+    case "Sort": {
+      if (t.name === "Type")
+        return err({ tag: "TypeHasNoType" });
+      return succ(sort("Type"));
+    }
+    case "Var": {
+      const le = jc.local.slice().reverse().find(e => e.name === t.name);
+      if (le)
+        return succ(le.type);
+      const ge = jc.global.slice().reverse().find(e => e.name === t.name);
+      if (ge)
+        return succ(ge.type);
+      return err({ tag: "UnboundVariable", name: t.name });
+    }
+    case "Lam": {
+      const local = jc.local.slice();
+      local.push(ctxVar(t.name, t.type));
+      const bodyType = typeInfer(judgCtx(jc.global, local), t.body);
+      if (isErr(bodyType))
+        return bodyType;
+      const termType = pi(t.name, t.type, bodyType.value);
+      const s = typeInfer(jc, termType);
+      if (isErr(s))
+        return s;
+      const sNF = headNF(dszNF(jc, s.value));
+      if (sNF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: sNF });
+      return succ(termType);
+    }
+    case "Pi": {
+      const s0 = typeInfer(jc, t.type);
+      if (isErr(s0))
+        return s0;
+      const s0NF = headNF(dszNF(jc, s0.value));
+      if (s0NF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: s0NF });
+      const local = jc.local.slice();
+      local.push(ctxVar(t.name, t.type));
+      const s1 = typeInfer(judgCtx(jc.global, local), t.body);
+      if (isErr(s1))
+        return s1;
+      const s1NF = headNF(dszNF(jc, s1.value));
+      if (s1NF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: s1NF });
+      return succ(s1NF);
+    }
+    case "Pair": {
+      if (t.as) {
+        const asCheck = typeCheck(jc, t, t.as);
+        if (isErr(asCheck))
+          return asCheck;
+        return succ(t.as);
+      } else {
+        const firstType = typeInfer(jc, t.fst);
+        if (isErr(firstType))
+          return firstType;
+        const secondType = typeInfer(jc, t.snd);
+        if (isErr(secondType))
+          return secondType;
+        return succ(sig("_", firstType.value, secondType.value));
+      }
+    }
+    case "Fst": {
+      const pairType = typeInfer(jc, t.pair);
+      if (isErr(pairType))
+        return pairType;
+      const pairTypeNF = headNF(dszNF(jc, pairType.value));
+      if (pairTypeNF.tag !== "Sig")
+        return err({ tag: "ExpectedSigma", pair: t.pair, actual: pairTypeNF });
+      return succ(pairTypeNF.type);
+    }
+    case "Snd": {
+      const pairType = typeInfer(jc, t.pair);
+      if (isErr(pairType))
+        return pairType;
+      const pairTypeNF = headNF(dszNF(jc, pairType.value));
+      if (pairTypeNF.tag !== "Sig")
+        return err({ tag: "ExpectedSigma", pair: t.pair, actual: pairTypeNF });
+      return succ(subst(pairTypeNF.body, pairTypeNF.name, fst(t.pair)));
+    }
+    case "Sig": {
+      const s0 = typeInfer(jc, t.type);
+      if (isErr(s0))
+        return s0;
+      const s0NF = headNF(dszNF(jc, s0.value));
+      if (s0NF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: s0NF });
+      const local = jc.local.slice();
+      local.push(ctxVar(t.name, t.type));
+      const s1 = typeInfer(judgCtx(jc.global, local), t.body);
+      if (isErr(s1))
+        return s1;
+      const s1NF = headNF(dszNF(jc, s1.value));
+      if (s1NF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: s1NF });
+      if ((s0NF.name === "Prop" && s1NF.name === "Prop")
+        || s1NF.name === "Type")
+        return succ(s1NF);
+      return err({
+        tag: "ImpossibleCombination",
+        sort0: s0NF.name,
+        sort1: s1NF.name,
+      });
+    }
+    case "Let": {
+      let defType: Term;
+      if (t.type) {
+        const defCheck = typeCheck(jc, t.def, t.type);
+        if (isErr(defCheck))
+          return defCheck;
+        defType = t.type;
+      } else {
+        const defInfer = typeInfer(jc, t.def);
+        if (isErr(defInfer))
+          return defInfer;
+        defType = defInfer.value;
+      }
+      const local = jc.local.slice();
+      local.push(ctxDef(t.name, defType, t.def));
+      const bodyType = typeInfer(judgCtx(jc.global, local), t.body);
+      if (isErr(bodyType))
+        return bodyType;
+      return succ(subst(bodyType.value, t.name, t.def));
+    }
+    case "App": {
+      const funType = typeInfer(jc, t.fun);
+      if (isErr(funType))
+        return funType;
+      const funTypeNF = headNF(dszNF(jc, funType.value));
+      if (funTypeNF.tag !== "Pi")
+        return err({ tag: "ExpectedPi", fun: t.fun, actual: funTypeNF });
+      const argType = typeInfer(jc, t.arg);
+      if (isErr(argType))
+        return argType;
+      if (!ahEq(jc, argType.value, funTypeNF.type))
+        return err({ tag: "TypeMismatch", expected: funTypeNF.type, actual: argType.value });
+      return succ(subst(funTypeNF.body, funTypeNF.name, t.arg));
+    }
+  }
+}
+
+function typeCheck(jc: JudgContext, t: Term, expected: Term): Result<true, TypeError> {
+  switch (t.tag) {
+    case "Pair": {
+      const expectedNF = headNF(dszNF(jc, expected));
+      if (expectedNF.tag !== "Sig")
+        return err({ tag: "ExpectedSigma", pair: t, actual: expectedNF });
+      const name = expectedNF.name;
+      const fstExpected = expectedNF.type
+      const fstCheck = typeCheck(jc, t.fst, fstExpected);
+      if (isErr(fstCheck))
+        return fstCheck;
+      const sndExpected = subst(expectedNF.body, expectedNF.name, t.fst);
+      const sndCheck = typeCheck(jc, t.snd, sndExpected);
+      if (isErr(sndCheck))
+        return sndCheck;
+      const local = jc.local.slice();
+      local.push(ctxVar(name, fstExpected));
+      const extendedJc = judgCtx(jc.global, local);
+      const s = typeInfer(extendedJc, sndExpected);
+      if (isErr(s))
+        return s;
+      const sNF = headNF(dszNF(extendedJc, s.value));
+      if (sNF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: sNF });
+      return succ(true);
+    }
+    default: {
+      const inferred = typeInfer(jc, t);
+      if (isErr(inferred))
+        return inferred;
+      if (!ahEq(jc, inferred.value, expected))
+        return err({ tag: "TypeMismatch", expected, actual: inferred.value });
+      return succ(true);
+    }
+  }
+}
+
+editor.tsx
+import Editor, { type Monaco } from '@monaco-editor/react';
+import * as monaco from 'monaco-editor';
+
+const languageDefinition: monaco.languages.IMonarchLanguage = {
+  declarationKeywords: [
+    'def', 'var'
+  ],
+
+  expressionKeywords: [
+    'fun', 'forall', 'exist', 'let', 'in'
+  ],
+
+  typeKeywords: [
+    'Prop', 'Type'
+  ],
+
+  operators: [
+    '=>', '->', ':='
+  ],
+
+  symbols: /[=><!~?:&|+\-*/^%]+/,
+
+  tokenizer: {
+    root: [
+      [/[A-Z][\w']*/, {
+        cases: {
+          '@typeKeywords': 'keyword.type',
+          '@default': 'type.identifier',
+        }
+      }],
+      
+      [/[a-z_][\w']*/, {
+        cases: {
+          '@declarationKeywords': 'keyword.declaration',
+          '@expressionKeywords': 'keyword.control',
+          '@default': 'identifier'
+        }
+      }],
+
+      { include: '@whitespace' },
+
+      [/[()<>]/, '@brackets'],
+      [/[;,]/, 'delimiter'],
+      [/:(?!=)/, 'delimiter'],
+      [/\.[01]/, 'operator'],
+
+      [/@symbols/, {
+        cases: {
+          '@operators': 'operator',
+          '@default': ''
+        }
+      }],
+    ],
+
+    whitespace: [
+      [/\s+/, 'white'],
+      [/--.*$/, 'comment'],
+      [/\{-/, 'comment', '@comment'],
+    ],
+
+    comment: [
+      [/[^{-]+/, 'comment'],
+      [/\{-/, 'comment', '@push'],
+      [/-}/, 'comment', '@pop'],
+      [/[{-]/, 'comment']
+    ],
+  },
+};
+
+const customTheme: monaco.editor.IStandaloneThemeData = {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'keyword.type', foreground: '#4EC9B0', fontStyle: 'bold' },
+    { token: 'type.identifier', foreground: '#8FBC8F', fontStyle: 'bold' },
+    { token: 'keyword.declaration', foreground: '#C586C0', fontStyle: 'bold' },
+    { token: 'keyword.control', foreground: '#00BFFF' },
+    { token: 'identifier', foreground: '#9CDCFE' },
+    { token: 'operator', foreground: '#D4D4D4' },
+    { token: 'comment', foreground: '#6A9955', fontStyle: 'italic' },
+  ],
+  colors: {
+    'editor.background': '#1e1e1e',
+  }
+};
+
+export const CustomLanguageEditor = (
+  { source, replace }: { source: string; replace: (_: string) => void }
+) => {
+  const handleEditorWillMount = (monaco: Monaco) => {
+    monaco.languages.register({ id: 'myLang' });
+    monaco.languages.setMonarchTokensProvider('myLang', languageDefinition);
+    monaco.editor.defineTheme('myTheme', customTheme);
+  }
+  return (
+    <>
+      <div style={{ 
+        height: '800px', 
+        border: '1px solid #333' 
+      }}>
+        <Editor
+          height="100%"
+          defaultLanguage="myLang"
+          value={source}
+          theme="myTheme"
+          beforeMount={handleEditorWillMount}
+          onChange={e => replace(e!)}
+          options={{
+            fontSize: 14,
+            minimap: { enabled: true },
+            automaticLayout: true,
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+          }}
+        />
+      </div>
+    </>
+  );
+}
+
+App.tsx
+import { useState, useEffect, useTransition, useRef } from "react";
+import { CustomLanguageEditor } from "./editor"
+import "./app.css";
+import { type Term } from "./ast";
+import { err, isErr, succ, type Result } from "./result";
+import { type CtxElement, type JudgContext, judgCtx } from "./core";
+import { type TokenType, Tokenizer } from "./tokenize";
+import { Parser } from "./parse";
+import { wellFormed } from "./typecheck";
+import { checkJudgContext } from "./context";
+
+type Phase = "tokenize" | "parse" | "context" | "typecheck";
+
+type UIError = {
+  phase: Phase;
+  title: string;
+  message: string;
+  detail?: unknown;
+};
+
+function renderError(err: UIError) {
+  const message =
+    typeof err.message === "string"
+      ? err.message
+      : JSON.stringify(err.message, null, 2);
+  return (
+    <div className="error">
+      <div className="error-title">
+        [{err.phase.toUpperCase()}] {err.title}
+      </div>
+      <div className="error-message">{message}</div>
+      {err.detail !== undefined && (
+        <details>
+          <summary>詳細</summary>
+          <pre>
+            {(() => {
+              try {
+                return JSON.stringify(err.detail, null, 2);
+              } catch {
+                return String(err.detail);
+              }
+            })()}
+          </pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function tokenDesc(t: TokenType): string {
+  switch (t) {
+    case "RES_DEF":
+      return "def";
+    case "RES_VAR":
+      return "var";
+    case "RES_PROP":
+      return "Prop";
+    case "RES_TYPE":
+      return "Type";
+    case "RES_FUN":
+      return "fun";
+    case "RES_FORALL":
+      return "forall";
+    case "RES_EXIST":
+      return "exist";
+    case "RES_LET":
+      return "let";
+    case "RES_IN":
+      return "in";
+    case "FAT_ARROW":
+      return "=>";
+    case "ARROW":
+      return "->";
+    case "ASSIGN":
+      return ":=";
+    case "LPAREN":
+      return "(";
+    case "RPAREN":
+      return ")";
+    case "COLON":
+      return ":";
+    case "COMMA":
+      return ",";
+    case "LANGLE":
+      return "<";
+    case "RANGLE":
+      return ">";
+    case "DOTONE":
+      return ".1";
+    case "DOTTWO":
+      return ".2";
+    case "AND":
+      return "&";
+    case "SEMICOLON":
+      return ";";
+    case "IDENT":
+      return "識別子";
+    default:
+      return "";
+  }
+}
+
+function showTerm(t: Term): string {
+  switch (t.tag) {
+    case "Sort":
+      return t.name;
+    case "Var":
+      return t.name;
+    case "Lam":
+      return `(fun (${t.name} : ${showTerm(t.type)}) => ${showTerm(t.body)})`;
+    case "Pi":
+      return `(forall (${t.name} : ${showTerm(t.type)}), ${showTerm(t.body)})`;
+    case "Pair":
+      return `<${showTerm(t.fst)}, ${showTerm(t.snd)}>${t.as ? ` : ${showTerm(t.as)}` : ``}`;
+    case "Fst":
+      return `${showTerm(t.pair)}.1`;
+    case "Snd":
+      return `${showTerm(t.pair)}.2`;
+    case "Sig":
+      return `(exist (${t.name} : ${showTerm(t.type)}), ${showTerm(t.body)})`;
+    case "Let":
+      return `(let ${t.name}${t.type ? ` : ${showTerm(t.type)}` : ``} := ${showTerm(t.def)} in ${showTerm(t.body)})`;
+    case "App":
+      return `(${showTerm(t.fun)} ${showTerm(t.arg)})`;
+  }
+}
+
+function showCtxElement(e: CtxElement): string {
+  if (e.tag === "Def")
+    return `def ${e.name} : ${showTerm(e.type)} := ${showTerm(e.def)}`;
+  else
+    return `var ${e.name} : ${showTerm(e.type)}`;
+}
+
+const init =
+`def Nat: Prop := forall A: Prop, (A -> A) -> A -> A;
+
+def zero: Nat :=
+  fun (A: Prop) (f: A -> A) (x: A) => x;
+
+def succ : Nat -> Nat :=
+  fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => f (n A f x);
+
+def iter : Nat -> forall (A : Prop), (A -> A) -> A -> A :=
+  fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => n A f x;
+
+def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
+  fun (n : Nat)
+    (A : Prop)
+    (a : A)
+    (s : Nat -> A -> A) =>
+      let step (p : Nat & A) :=
+        <succ p.1, s p.1 p.2>
+      in (n (Nat & A) step <zero, a>).2;
+
+
+def Bool: Prop := forall (A: Prop), A -> A -> A;
+
+def true: Bool := fun (A: Prop) (x y: A) => x;
+
+def false: Bool := fun (A: Prop) (x y: A) => y;
+
+def or: Bool -> Bool -> Bool :=
+  fun a b: Bool => a Bool true b;
+
+def and: Bool -> Bool -> Bool :=
+  fun a b: Bool => a Bool b false;
+
+def not: Bool -> Bool :=
+  fun a: Bool => a Bool false true;
+
+
+def List (A: Prop): Prop :=
+  forall L: Prop, L -> (A -> L -> L) -> L;
+
+def nil (A: Prop): List A :=
+  fun (L: Prop) (x: L) (f: A -> L -> L) => x;
+
+def cons (A: Prop): A -> List A -> List A :=
+  fun (a: A)
+    (s: List A)
+    (L: Prop)
+    (x: L)
+    (f: A -> L -> L) =>
+      f a (s L x f);
+
+
+def Vec (A: Prop) (n: Nat): Prop :=
+  forall V: Nat -> Prop,
+    V zero -> (forall m: Nat, A -> V m -> V (succ m)) -> V n;
+
+def nilv (A: Prop): Vec A zero :=
+  fun (V: Nat -> Prop)
+    (x: V zero)
+    (f: forall m: Nat, A -> V m -> V (succ m))
+      => x;
+
+def consv (A: Prop) (n: Nat): A -> Vec A n -> Vec A (succ n) :=
+  fun (a: A)
+    (s: Vec A n)
+    (V: Nat -> Prop)
+    (x: V zero)
+    (f: forall m: Nat, A -> V m -> V (succ m))
+      => f n a (s V x f);
+
+
+def and_intro (A B C: Prop) (im_a: C -> A) (im_b: C -> B): C -> A & B :=
+  fun c: C => <im_a c, im_b c>;
+
+
+def Union (A B: Prop): Prop :=
+  forall C: Prop, (A -> C) -> (B -> C) -> C;
+
+def in_l (A B: Prop): A -> Union A B :=
+  fun (a: A) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_a a;
+
+def in_r (A B: Prop): B -> Union A B :=
+  fun (b: B) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_b b;
+
+def or_elim (A B C: Prop) (im_a: A -> C) (im_b: B -> C): Union A B -> C :=
+  fun union: Union A B => union C im_a im_b;
+
+
+def Truth: Prop := forall A: Prop, A -> A;
+
+def id (A : Prop) (x : A) : A := x;
+
+
+def Contra: Prop := forall (A: Prop), A;
+
+def Not (A: Prop): Prop := A -> Contra;
+
+def Not_elim: forall A: Prop, Contra -> A :=
+  fun (A: Prop) (co: Contra) => co A;
+
+
+def EM: Prop := forall A: Prop, Union A (Not A);
+
+def DNE: Prop := forall A: Prop, Not (Not A) -> A;
+
+def EM_to_DNE: EM -> DNE :=
+  fun (em: EM)
+    (A: Prop)
+    (nna: Not (Not A)) =>
+      or_elim A (Not A) A (id A) (fun na: Not A => Not_elim A (nna na)) (em A);
+
+def DNE_to_EM: DNE -> EM :=
+  fun (dne: DNE) (A: Prop) =>
+    let nnEM (p: Not (Union A (Not A))) :=
+      let na := fun a: A => p (in_l A (Not A) a)
+      in p (in_r A (Not A) na)
+    in dne (Union A (Not A)) nnEM;
+
+
+def Eq (A: Prop) (a b: A): Prop := forall P: A -> Prop, P a -> P b;
+
+def ref (A: Prop) (a: A): Eq A a a := fun P: A -> Prop => id (P a);
+
+def symm (A: Prop) (a b: A): Eq A a b -> Eq A b a :=
+  fun (eqab: Eq A a b) (P: A -> Prop) =>
+    let q := eqab (fun x : A => P x -> P a)
+    in q (id (P a));
+
+def trans (A: Prop) (a b c: A) : Eq A a b -> Eq A b c -> Eq A a c :=
+  fun (eqab: Eq A a b)
+    (eqbc: Eq A b c)
+    (P: A -> Prop)
+    (pa: P a) =>
+      eqbc P (eqab P pa);
+
+
+def funEq (A B: Prop) (f g: A -> B): Prop :=
+  forall a: A, Eq B (f a) (g a);
+
+def FunEq (A B: Prop) (f g: A -> B): Prop :=
+  Eq (A -> B) f g;
+
+def F_to_f (A B: Prop) (f g: A -> B): FunEq A B f g -> funEq A B f g :=
+  fun (F: FunEq A B f g)
+    (a: A)
+    (R: B -> Prop) =>
+      F (fun h: A -> B => R (h a));`
+
+export default function App() {
+  const [source, setSource] = useState(init);
+  const [error, setError] = useState<UIError | null>(null);
+  const [success, setSuccess] = useState<string>("");
+  const [successDefs, setSuccessDefs] = useState<string[]>([]);
+  const [judgContext, setJudgContext] = useState<JudgContext>(judgCtx([], []));
+  const [isPending, startTransition] = useTransition();
+  const runIdRef = useRef(0);
+
+  const fail = (e: UIError) => {
+    setSuccess("");
+    setError(e);
+  };
+
+  const runUntilContext = (code: string): Result<true, UIError> => {
+    setJudgContext(judgCtx([], []));
+    const tokenizer = new Tokenizer(code);
+    const parser = new Parser(tokenizer);
+    const ctxR = parser.parseProgram();
+    if (isErr(ctxR)) {
+      let msg: string;
+      switch (ctxR.err.tag) {
+        case "Tokenizer":
+          return err({
+            phase: "tokenize",
+            title: "字句解析エラー",
+            message:
+              ctxR.err.error.tag === "UnexpectedChar"
+                ? `不正な文字 ${ctxR.err.error.char} を検出しました。`
+                : "コメントが閉じられていません。",
+            detail: ctxR.err.error,
+          });
+        case "UnexpectedToken":
+          msg = `ここには ${tokenDesc(ctxR.err.expected)} が必要ですが、 ${tokenDesc(ctxR.err.actual.type)} が見つかりました。`;
+          break;
+        case "ExpectedBinder":
+          msg = `ここにはBinderが必要ですが、 ${ctxR.err.token.type} が見つかりました。`;
+          break;
+        case "ExtraneousDef":
+          msg = `不要な定義 ${showTerm(ctxR.err.def)} が検出されました。`;
+          break;
+        case "ExpectedAtom":
+          msg = `ここにはAtomが必要ですが、 ${ctxR.err.token.type} が検出されました。)`;
+          break;
+        case "ExpectedDef":
+          msg = `定義が必要な位置です。`;
+          break;
+      }
+      return err({
+        phase: "parse",
+        title: "構文解析エラー",
+        message: msg,
+        detail: ctxR.err,
+      });
+    }
+    const ctx = ctxR.value;
+    const jc = judgCtx(ctx, []);
+    const ctxCheck = checkJudgContext(jc);
+    if (isErr(ctxCheck)) {
+      const e = ctxCheck.err;
+      let msg = "";
+      switch (e.tag) {
+        case "DuplicateGlobal":
+          msg = `グローバル定義 ${e.name} が重複しています。`;
+          break;
+        case "DuplicateLocal":
+          msg = `ローカル定義 ${e.name} が重複しています。`;
+          break;
+        case "SelfReference":
+          msg = `${e.kind} にて自分の名前 ${e.name} を参照しています。`;
+          break;
+        case "GlobalDependsOnLocal":
+          msg = `ローカル定義 ${e.to} (${e.kind}) にグローバル定義 ${e.from} が依存しています。`;
+          break;
+        case "ForwardDependency":
+          msg = `${e.from} は 現在未定義の${e.to} (${e.kind}) に依存しています。`;
+          break;
+        case "Undefined":
+          msg = `定義 ${e.in} の中で未定義の名前 ${e.name} (${e.kind}) が使われています。`;
+          break;
+        case "Cycle":
+          msg = "定義に循環依存があります:\n" +
+            e.path.map(p => `${p.from} → ${p.to} (${p.kind})`).join("\n");
+          break;
+      }
+      return err({
+        phase: "context",
+        title: "文脈エラー",
+        message: msg,
+        detail: e,
+      });
+    }
+    setJudgContext(jc);
+    console.log("aaaaaaaaaaaaaaaaa");
+    return succ(true);
+  }
+
+  useEffect(() => {
+    const id = ++runIdRef.current;
+    startTransition(() => {
+      const result = runUntilContext(source);
+      if (runIdRef.current !== id)
+        return;
+      if (isErr(result))
+        fail(result.err);
+      else setError(null);
+    });
+  }, [source]);
+
+  const runTypeCheck = () => {
+    setError(null);
+    setSuccess("");
+    setSuccessDefs([]);
+    const wf = wellFormed(judgContext);
+    for (const c of judgContext.global) {
+      console.log(showCtxElement(c));
+    }
+    if (isErr(wf)) {
+      let msg = "";
+      switch (wf.err.error.tag) {
+        case "TypeHasNoType":
+          msg = `Type は型を持ちません。\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "UnboundVariable":
+          msg = `変数 ${wf.err.error.name} は定義されていません。\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "ExpectedSort":
+          msg = `Sort (Prop / Type) が期待されましたが、次の型でした: ${showTerm(wf.err.error.actual)}\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "ImpossibleCombination":
+          msg = `Sortの組み合わせが無効です:\nsort0 -> ${wf.err.error.sort0}\nsort1 -> ${wf.err.error.sort0}\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "ExpectedPi":
+          msg = `${showTerm(wf.err.error.fun)}の型として関数型 (forall) が期待されましたが、次の型でした: ${showTerm(wf.err.error.actual)}\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "ExpectedSigma":
+          msg = `${showTerm(wf.err.error.pair)}の型として直積型 (exist) が期待されましたが、次の型でした: ${showTerm(wf.err.error.actual)}\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "TypeMismatch":
+          msg = `型が一致しません。\n` +
+            `期待された型: ${showTerm(wf.err.error.expected)}\n` +
+            `実際の型: ${showTerm(wf.err.error.actual)}\n\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+      }
+      fail({
+        phase: "typecheck",
+        title: `型エラー`,
+        message: msg,
+        detail: wf.err,
+      });
+      return;
+    }
+    setSuccess("✔ すべての定義は正しく型付けされました");
+    setSuccessDefs(judgContext.global.map(e => e.name));
+  };
+
+  return (
+    <div className="app">
+      <header>
+        CoC Playground
+      </header>
+      <CustomLanguageEditor
+        source={source}
+        replace={e => setSource(e)}
+      />
+      <footer>
+        <div className="controls">
+          <button onClick={runTypeCheck}>Check</button>
+        </div>
+        <div className="result">
+          {isPending && <span>解析中…</span>}
+          {error && renderError(error)}
+          {success &&
+            <div className="success">
+              {success+" "}
+              {successDefs.join(", ")}
+            </div>
+          }
+        </div>
+      </footer>
+    </div>
+  );
+}

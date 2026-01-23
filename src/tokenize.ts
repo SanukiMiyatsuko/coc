@@ -1,9 +1,9 @@
-import { type Result, succ, err, isErr } from "./result";
+import { type Result, succ, err } from "./result";
 
-type Position = { line: number; col: number };
+export type Position = { line: number; col: number };
 export type Range = { start: Position; end: Position };
 
-type TokenizerError =
+export type TokenizerError =
   | { tag: "UnexpectedChar"; char: string; pos: Position }
   | { tag: "UnclosedComment"; pos: Position };
 
@@ -101,7 +101,7 @@ export class Tokenizer {
     return { line: this.line, col: this.col };
   }
 
-  private next(): Result<Token, TokenizerError> {
+  next(): Result<Token, TokenizerError> {
     if (this.eof()) {
       const p = this.currentPosition();
       return succ({
@@ -143,17 +143,5 @@ export class Tokenizer {
       char: this.src[this.pos],
       pos: this.currentPosition(),
     });
-  }
-
-  tokenize(): Result<Token[], TokenizerError> {
-    const tokens: Token[] = [];
-    let t: Result<Token, TokenizerError>;
-    do {
-      t = this.next();
-      if (isErr(t))
-        return t;
-      tokens.push(t.value);
-    } while (t.value.type !== "EOF");
-    return succ(tokens);
   }
 }

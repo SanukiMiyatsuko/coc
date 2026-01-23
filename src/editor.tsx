@@ -1,7 +1,6 @@
 import Editor, { type Monaco } from '@monaco-editor/react';
-import * as monaco from 'monaco-editor';
 
-const languageDefinition: monaco.languages.IMonarchLanguage = {
+const languageDefinition: Monaco['languages']['IMonarchLanguage'] = {
   declarationKeywords: [
     'def', 'var'
   ],
@@ -24,15 +23,15 @@ const languageDefinition: monaco.languages.IMonarchLanguage = {
     root: [
       [/[A-Z][\w']*/, {
         cases: {
-          '@typeKeywords': 'keyword.type',
-          '@default': 'type.identifier',
+          '@typeKeywords': 'keyword-type',
+          '@default': 'type-identifier',
         }
       }],
       
       [/[a-z_][\w']*/, {
         cases: {
-          '@declarationKeywords': 'keyword.declaration',
-          '@expressionKeywords': 'keyword.control',
+          '@declarationKeywords': 'keyword-declaration',
+          '@expressionKeywords': 'keyword-control',
           '@default': 'identifier'
         }
       }],
@@ -42,7 +41,7 @@ const languageDefinition: monaco.languages.IMonarchLanguage = {
       [/[()<>]/, '@brackets'],
       [/[;,]/, 'delimiter'],
       [/:(?!=)/, 'delimiter'],
-      [/\.[01]/, 'operator'],
+      [/\.[12]/, 'operator'],
 
       [/@symbols/, {
         cases: {
@@ -67,25 +66,31 @@ const languageDefinition: monaco.languages.IMonarchLanguage = {
   },
 };
 
-const customTheme: monaco.editor.IStandaloneThemeData = {
+const customTheme: Monaco['editor']['IStandaloneThemeData'] = {
   base: 'vs-dark',
   inherit: true,
   rules: [
-    { token: 'keyword.type', foreground: '4EC9B0', fontStyle: 'bold' },
-    { token: 'type.identifier', foreground: '8FBC8F', fontStyle: 'bold' },
-    { token: 'keyword.declaration', foreground: 'C586C0', fontStyle: 'bold' },
-    { token: 'keyword.control', foreground: '00BFFF' },
-    { token: 'identifier', foreground: '9CDCFE' },
-    { token: 'operator', foreground: 'D4D4D4' },
-    { token: 'comment', foreground: '6A9955', fontStyle: 'italic' },
+    { token: 'keyword-type', foreground: '#4EC9B0', fontStyle: 'bold' },
+    { token: 'type-identifier', foreground: '#8FBC8F', fontStyle: 'bold' },
+    { token: 'keyword-declaration', foreground: '#C586C0', fontStyle: 'bold' },
+    { token: 'keyword-control', foreground: '#00BFFF' },
+    { token: 'identifier', foreground: '#9CDCFE' },
+    { token: 'operator', foreground: '#D4D4D4' },
+    { token: 'comment', foreground: '#6A9955', fontStyle: 'italic' },
   ],
   colors: {
     'editor.background': '#1e1e1e',
   }
 };
 
-export const CustomLanguageEditor = ({ source, replace }: { source: string;  replace: (_: string) => void }) => {
-  function handleEditorWillMount(monaco: Monaco) {
+export const CustomLanguageEditor = (
+  { source, replace }
+    : {
+      source: string;
+      replace: (_: string) => void;
+    }
+) => {
+  const handleEditorWillMount = (monaco: Monaco) => {
     monaco.languages.register({ id: 'myLang' });
     monaco.languages.setMonarchTokensProvider('myLang', languageDefinition);
     monaco.editor.defineTheme('myTheme', customTheme);
@@ -98,7 +103,7 @@ export const CustomLanguageEditor = ({ source, replace }: { source: string;  rep
       }}>
         <Editor
           height="100%"
-          defaultLanguage="myLang"
+          language="myLang"
           value={source}
           theme="myTheme"
           beforeMount={handleEditorWillMount}

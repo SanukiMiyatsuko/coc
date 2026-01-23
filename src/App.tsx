@@ -1,10 +1,10 @@
-import { useState } from "react";
-import { CustomLanguageEditor } from "./language"
+import { useState, useEffect, useTransition, useRef } from "react";
+import { CustomLanguageEditor } from "./editor"
 import "./app.css";
 import { type Term } from "./ast";
-import { isErr } from "./result";
-import { type CtxElement, judgCtx } from "./core";
-import { Tokenizer } from "./tokenize";
+import { err, isErr, succ, type Result } from "./result";
+import { type CtxElement, type JudgContext, judgCtx } from "./core";
+import { type TokenType, Tokenizer } from "./tokenize";
 import { Parser } from "./parse";
 import { wellFormed } from "./typecheck";
 import { checkJudgContext } from "./context";
@@ -47,6 +47,59 @@ function renderError(err: UIError) {
   );
 }
 
+function tokenDesc(t: TokenType): string {
+  switch (t) {
+    case "RES_DEF":
+      return "def";
+    case "RES_VAR":
+      return "var";
+    case "RES_PROP":
+      return "Prop";
+    case "RES_TYPE":
+      return "Type";
+    case "RES_FUN":
+      return "fun";
+    case "RES_FORALL":
+      return "forall";
+    case "RES_EXIST":
+      return "exist";
+    case "RES_LET":
+      return "let";
+    case "RES_IN":
+      return "in";
+    case "FAT_ARROW":
+      return "=>";
+    case "ARROW":
+      return "->";
+    case "ASSIGN":
+      return ":=";
+    case "LPAREN":
+      return "(";
+    case "RPAREN":
+      return ")";
+    case "COLON":
+      return ":";
+    case "COMMA":
+      return ",";
+    case "LANGLE":
+      return "<";
+    case "RANGLE":
+      return ">";
+    case "DOTONE":
+      return ".1";
+    case "DOTTWO":
+      return ".2";
+    case "AND":
+      return "&";
+    case "SEMICOLON":
+      return ";";
+    case "IDENT":
+      return "識別子";
+    default:
+      return "";
+  }
+}
+
 function showTerm(t: Term): string {
   switch (t.tag) {
     case "Sort":
@@ -58,7 +111,7 @@ function showTerm(t: Term): string {
     case "Pi":
       return `(forall (${t.name} : ${showTerm(t.type)}), ${showTerm(t.body)})`;
     case "Pair":
-      return `<${showTerm(t.fst)}, ${showTerm(t.snd)}>`;
+      return `<${showTerm(t.fst)}, ${showTerm(t.snd)}>${t.as ? ` : ${showTerm(t.as)}` : ``}`;
     case "Fst":
       return `${showTerm(t.pair)}.1`;
     case "Snd":
@@ -66,7 +119,7 @@ function showTerm(t: Term): string {
     case "Sig":
       return `(exist (${t.name} : ${showTerm(t.type)}), ${showTerm(t.body)})`;
     case "Let":
-      return `(let ${t.name} : ${showTerm(t.type)} := ${showTerm(t.def)} in ${showTerm(t.body)})`;
+      return `(let ${t.name}${t.type ? ` : ${showTerm(t.type)}` : ``} := ${showTerm(t.def)} in ${showTerm(t.body)})`;
     case "App":
       return `(${showTerm(t.fun)} ${showTerm(t.arg)})`;
   }
@@ -80,15 +133,25 @@ function showCtxElement(e: CtxElement): string {
 }
 
 const init =
-`def id (A : Prop) (x : A) : A := x;
-
-def Nat: Prop := forall A: Prop, (A -> A) -> A -> A;
+`def Nat: Prop := forall A: Prop, (A -> A) -> A -> A;
 
 def zero: Nat :=
   fun (A: Prop) (f: A -> A) (x: A) => x;
 
 def succ : Nat -> Nat :=
   fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => f (n A f x);
+
+def iter : Nat -> forall (A : Prop), (A -> A) -> A -> A :=
+  fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => n A f x;
+
+def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
+  fun (n : Nat)
+    (A : Prop)
+    (a : A)
+    (s : Nat -> A -> A) =>
+      let step (p : Nat & A) :=
+        <succ p.1, s p.1 p.2>
+      in (n (Nat & A) step <zero, a>).2;
 
 
 def Bool: Prop := forall (A: Prop), A -> A -> A;
@@ -107,37 +170,6 @@ def not: Bool -> Bool :=
   fun a: Bool => a Bool false true;
 
 
-def Prod (A B: Prop): Prop :=
-  forall C: Prop, (A -> B -> C) -> C;
-
-def pair (A B: Prop): A -> B -> Prod A B :=
-  fun (a: A) (b: B) (C: Prop) (f: A -> B -> C) => f a b;
-
-def left (A B: Prop): Prod A B -> A :=
-  fun p: Prod A B => p A (fun (a: A) (b: B) => a);
-
-def right (A B: Prop): Prod A B -> B :=
-  fun p: Prod A B => p B (fun (a: A) (b: B) => b);
-
-def and_intro (A B C: Prop) (im_a: C -> A) (im_b: C -> B): C -> Prod A B :=
-  fun c: C =>
-    let a: A := im_a c in
-      let b: B := im_b c in
-        pair A B a b;
-
-
-def iter : Nat -> forall (A : Prop), (A -> A) -> A -> A :=
-  fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => n A f x;
-
-def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
-  fun (n : Nat) (A : Prop) (a : A) (s : Nat -> A -> A) =>
-    let step : Nat & A -> Nat & A :=
-      fun p : Nat & A =>
-        <succ p.1, s p.1 p.2> in
-      let init : Nat & A := <zero, a> in
-        (n (Nat & A) step init).2;
-
-
 def List (A: Prop): Prop :=
   forall L: Prop, L -> (A -> L -> L) -> L;
 
@@ -145,7 +177,35 @@ def nil (A: Prop): List A :=
   fun (L: Prop) (x: L) (f: A -> L -> L) => x;
 
 def cons (A: Prop): A -> List A -> List A :=
-  fun (a: A) (s: List A) (L: Prop) (x: L) (f: A -> L -> L) => f a (s L x f);
+  fun (a: A)
+    (s: List A)
+    (L: Prop)
+    (x: L)
+    (f: A -> L -> L) =>
+      f a (s L x f);
+
+
+def Vec (A: Prop) (n: Nat): Prop :=
+  forall V: Nat -> Prop,
+    V zero -> (forall m: Nat, A -> V m -> V (succ m)) -> V n;
+
+def nilv (A: Prop): Vec A zero :=
+  fun (V: Nat -> Prop)
+    (x: V zero)
+    (f: forall m: Nat, A -> V m -> V (succ m))
+      => x;
+
+def consv (A: Prop) (n: Nat): A -> Vec A n -> Vec A (succ n) :=
+  fun (a: A)
+    (s: Vec A n)
+    (V: Nat -> Prop)
+    (x: V zero)
+    (f: forall m: Nat, A -> V m -> V (succ m))
+      => f n a (s V x f);
+
+
+def and_intro (A B C: Prop) (im_a: C -> A) (im_b: C -> B): C -> A & B :=
+  fun c: C => <im_a c, im_b c>;
 
 
 def Union (A B: Prop): Prop :=
@@ -161,11 +221,17 @@ def or_elim (A B C: Prop) (im_a: A -> C) (im_b: B -> C): Union A B -> C :=
   fun union: Union A B => union C im_a im_b;
 
 
+def Truth: Prop := forall A: Prop, A -> A;
+
+def id (A : Prop) (x : A) : A := x;
+
+
 def Contra: Prop := forall (A: Prop), A;
 
 def Not (A: Prop): Prop := A -> Contra;
 
-def Not_elim (A: Prop): Contra -> A := fun co: Contra => co A;
+def Not_elim: forall A: Prop, Contra -> A :=
+  fun (A: Prop) (co: Contra) => co A;
 
 
 def EM: Prop := forall A: Prop, Union A (Not A);
@@ -173,16 +239,17 @@ def EM: Prop := forall A: Prop, Union A (Not A);
 def DNE: Prop := forall A: Prop, Not (Not A) -> A;
 
 def EM_to_DNE: EM -> DNE :=
-  fun (em: EM) (A: Prop) (nna: Not (Not A)) =>
-    (or_elim A (Not A) A (id A) (fun (na: Not A) => Not_elim A (nna na)) (em A));
+  fun (em: EM)
+    (A: Prop)
+    (nna: Not (Not A)) =>
+      or_elim A (Not A) A (id A) (fun na: Not A => Not_elim A (nna na)) (em A);
 
 def DNE_to_EM: DNE -> EM :=
   fun (dne: DNE) (A: Prop) =>
-    let nnEM: Not (Not (Union A (Not A))) :=
-      fun (p: Not (Union A (Not A))) =>
-        let na: Not A := fun (a: A) => p (in_l A (Not A) a) in
-          p (in_r A (Not A) na) in
-      dne (Union A (Not A)) nnEM;
+    let nnEM (p: Not (Union A (Not A))) :=
+      let na := fun a: A => p (in_l A (Not A) a)
+      in p (in_r A (Not A) na)
+    in dne (Union A (Not A)) nnEM;
 
 
 def Eq (A: Prop) (a b: A): Prop := forall P: A -> Prop, P a -> P b;
@@ -191,78 +258,83 @@ def ref (A: Prop) (a: A): Eq A a a := fun P: A -> Prop => id (P a);
 
 def symm (A: Prop) (a b: A): Eq A a b -> Eq A b a :=
   fun (eqab: Eq A a b) (P: A -> Prop) =>
-    let q : (P a -> P a) -> (P b -> P a) :=
-      eqab (fun x : A => P x -> P a) in
-      q (id (P a));
+    let q := eqab (fun x : A => P x -> P a)
+    in q (id (P a));
 
 def trans (A: Prop) (a b c: A) : Eq A a b -> Eq A b c -> Eq A a c :=
-  fun (eqab: Eq A a b) (eqbc: Eq A b c) (P: A -> Prop) (pa: P a) =>
-    eqbc P (eqab P pa);
+  fun (eqab: Eq A a b)
+    (eqbc: Eq A b c)
+    (P: A -> Prop)
+    (pa: P a) =>
+      eqbc P (eqab P pa);
 
-def funEq (A B: Prop) (f g: A -> B): Prop := forall a: A, Eq B (f a) (g a);
 
-def FunEq (A B: Prop) (f g: A -> B): Prop := Eq (A -> B) f g;
+def funEq (A B: Prop) (f g: A -> B): Prop :=
+  forall a: A, Eq B (f a) (g a);
+
+def FunEq (A B: Prop) (f g: A -> B): Prop :=
+  Eq (A -> B) f g;
 
 def F_to_f (A B: Prop) (f g: A -> B): FunEq A B f g -> funEq A B f g :=
-  fun (F: FunEq A B f g) (a: A) (R: B -> Prop) => F (fun h: A -> B => R (h a));`
+  fun (F: FunEq A B f g)
+    (a: A)
+    (R: B -> Prop) =>
+      F (fun h: A -> B => R (h a));`
 
 export default function App() {
   const [source, setSource] = useState(init);
   const [error, setError] = useState<UIError | null>(null);
   const [success, setSuccess] = useState<string>("");
   const [successDefs, setSuccessDefs] = useState<string[]>([]);
+  const [judgContext, setJudgContext] = useState<JudgContext>(judgCtx([], []));
+  const [isPending, startTransition] = useTransition();
+  const runIdRef = useRef(0);
 
   const fail = (e: UIError) => {
     setSuccess("");
     setError(e);
   };
 
-  const run = () => {
-    setError(null);
-    setSuccess("");
-    setSuccessDefs([]);
-    const tokenizer = new Tokenizer(source);
-    const tokensR = tokenizer.tokenize();
-    if (isErr(tokensR)) {
-      fail({
-        phase: "tokenize",
-        title: "字句解析エラー",
-        message:
-          tokensR.err.tag === "UnexpectedChar"
-            ? `不正な文字 ${tokensR.err.char} を検出しました。`
-            : "コメントが閉じられていません。",
-        detail: tokensR.err,
-      });
-      return;
-    }
-    const parser = new Parser(tokensR.value);
+  const runUntilContext = (code: string): Result<true, UIError> => {
+    setJudgContext(judgCtx([], []));
+    const tokenizer = new Tokenizer(code);
+    const parser = new Parser(tokenizer);
     const ctxR = parser.parseProgram();
     if (isErr(ctxR)) {
       let msg: string;
       switch (ctxR.err.tag) {
+        case "Tokenizer":
+          return err({
+            phase: "tokenize",
+            title: "字句解析エラー",
+            message:
+              ctxR.err.error.tag === "UnexpectedChar"
+                ? `不正な文字 ${ctxR.err.error.char} を検出しました。`
+                : "コメントが閉じられていません。",
+            detail: ctxR.err.error,
+          });
         case "UnexpectedToken":
-          msg = `トークン ${ctxR.err.actual.type} は ${ctxR.err.expected} ではありません。`;
+          msg = `ここには ${tokenDesc(ctxR.err.expected)} が必要ですが、 ${tokenDesc(ctxR.err.actual.type)} が見つかりました。`;
           break;
         case "ExpectedBinder":
-          msg = `Binderが必要な位置です。 (実際に検出されたもの: ${ctxR.err.token.type})`;
+          msg = `ここにはBinderが必要ですが、 ${ctxR.err.token.type} が見つかりました。`;
           break;
         case "ExtraneousDef":
           msg = `不要な定義 ${showTerm(ctxR.err.def)} が検出されました。`;
           break;
         case "ExpectedAtom":
-          msg = `Atomが必要な位置です。 (実際に検出されたもの: ${ctxR.err.token.type})`;
+          msg = `ここにはAtomが必要ですが、 ${ctxR.err.token.type} が検出されました。)`;
           break;
         case "ExpectedDef":
           msg = `定義が必要な位置です。`;
           break;
       }
-      fail({
+      return err({
         phase: "parse",
         title: "構文解析エラー",
         message: msg,
         detail: ctxR.err,
       });
-      return;
     }
     const ctx = ctxR.value;
     const jc = judgCtx(ctx, []);
@@ -294,16 +366,35 @@ export default function App() {
             e.path.map(p => `${p.from} → ${p.to} (${p.kind})`).join("\n");
           break;
       }
-      fail({
+      return err({
         phase: "context",
         title: "文脈エラー",
         message: msg,
         detail: e,
       });
-      return;
     }
-    const wf = wellFormed(jc);
-    for (const c of jc.global) {
+    setJudgContext(jc);
+    return succ(true);
+  }
+
+  useEffect(() => {
+    const id = ++runIdRef.current;
+    startTransition(() => {
+      const result = runUntilContext(source);
+      if (runIdRef.current !== id)
+        return;
+      if (isErr(result))
+        fail(result.err);
+      else setError(null);
+    });
+  }, [source]);
+
+  const runTypeCheck = () => {
+    setError(null);
+    setSuccess("");
+    setSuccessDefs([]);
+    const wf = wellFormed(judgContext);
+    for (const c of judgContext.global) {
       console.log(showCtxElement(c));
     }
     if (isErr(wf)) {
@@ -322,15 +413,11 @@ export default function App() {
             `参照元: ${showCtxElement(wf.err.at)}`;
           break;
         case "ImpossibleCombination":
-          msg = `Sortの組み合わせが無効です:\nsort0 -> ${wf.err.error.sort0}\nsort1 -> ${wf.err.error.sort0}\n\n` +
+          msg = `Sortの組み合わせが無効です:\nsort0 -> ${wf.err.error.sort0}\nsort1 -> ${wf.err.error.sort1}\n\n` +
             `参照元: ${showCtxElement(wf.err.at)}`;
           break;
         case "ExpectedPi":
           msg = `${showTerm(wf.err.error.fun)}の型として関数型 (forall) が期待されましたが、次の型でした: ${showTerm(wf.err.error.actual)}\n\n` +
-            `参照元: ${showCtxElement(wf.err.at)}`;
-          break;
-        case "CannotInfer":
-          msg = `型を推論できない項${showTerm(wf.err.error.term)}が検出されました。\n\n` +
             `参照元: ${showCtxElement(wf.err.at)}`;
           break;
         case "ExpectedSigma":
@@ -353,7 +440,7 @@ export default function App() {
       return;
     }
     setSuccess("✔ すべての定義は正しく型付けされました");
-    setSuccessDefs(jc.global.map(e => e.name));
+    setSuccessDefs(judgContext.global.map(e => e.name));
   };
 
   return (
@@ -367,9 +454,10 @@ export default function App() {
       />
       <footer>
         <div className="controls">
-          <button onClick={run}>Check</button>
+          <button onClick={runTypeCheck}>Check</button>
         </div>
         <div className="result">
+          {isPending && <span>解析中…</span>}
           {error && renderError(error)}
           {success &&
             <div className="success">

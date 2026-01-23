@@ -16,6 +16,8 @@ export function freeVar(t: Term, acc: Set<Name> = new Set()): Set<Name> {
     case "Pair": {
       freeVar(t.fst, acc);
       freeVar(t.snd, acc);
+      if (t.as)
+        freeVar(t.as, acc);
       return acc;
     }
     case "Fst":
@@ -27,7 +29,8 @@ export function freeVar(t: Term, acc: Set<Name> = new Set()): Set<Name> {
       return acc;
     }
   }
-  freeVar(t.type, acc);
+  if (t.type)
+    freeVar(t.type, acc);
   if (t.tag === "Let")
     freeVar(t.def, acc);
   const bf = freeVar(t.body);
@@ -89,7 +92,10 @@ function substInter(t: Term, v: Name, u: Term, fu: Set<Name>): Term {
     case "Pair": {
       const fun = substInter(t.fst, v, u, fu);
       const arg = substInter(t.snd, v, u, fu);
-      return pair(fun, arg);
+      let type = undefined;
+      if (t.as)
+        type = substInter(t.as, v, u, fu);
+      return pair(fun, arg, type);
     }
     case "Fst":
       return fst(substInter(t.pair, v, u, fu));
@@ -97,7 +103,7 @@ function substInter(t: Term, v: Name, u: Term, fu: Set<Name>): Term {
       return snd(substInter(t.pair, v, u, fu));
     case "Let": {
       const x = t.name;
-      const pt = substInter(t.type, v, u, fu);
+      const pt = t.type ? substInter(t.type, v, u, fu) : undefined;
       const def = substInter(t.def, v, u, fu);
       if (x === v)
         return letIn(x, pt, def!, t.body);
@@ -111,7 +117,7 @@ function substInter(t: Term, v: Name, u: Term, fu: Set<Name>): Term {
       const y = freshName(x, used);
       const rename = substInter(t.body, x, varia(y), new Set([y]));
       const body = substInter(rename, v, u, fu);
-      return letIn(y, pt, def!, body);
+      return letIn(y, pt, def, body);
     }
     case "App": {
       const fun = substInter(t.fun, v, u, fu);
@@ -133,7 +139,8 @@ export function alphaEq(t: Term, u: Term): boolean {
   switch (t.tag) {
     case "Sort":
     case "Var":
-      return t.tag === u.tag && t.name === u.name;
+      return t.tag === u.tag
+        && t.name === u.name;
     case "Lam":
     case "Pi":
     case "Sig": {
@@ -150,10 +157,19 @@ export function alphaEq(t: Term, u: Term): boolean {
           subst(u.body, u.name, newVar)
         );
     }
-    case "Pair":
-      return t.tag === u.tag
-        && alphaEq(t.fst, u.fst)
-        && alphaEq(t.snd, u.snd);
+    case "Pair": {
+      if (t.tag !== u.tag)
+        return false;
+      if (!alphaEq(t.fst, u.fst))
+        return false;
+      if (!alphaEq(t.snd, u.snd))
+        return false;
+      if (t.as === undefined && u.as === undefined)
+        return true;
+      if (t.as === undefined || u.as === undefined)
+        return false;
+      return alphaEq(t.as, u.as);
+    }
     case "Fst":
     case "Snd":
       return t.tag === u.tag
@@ -166,12 +182,17 @@ export function alphaEq(t: Term, u: Term): boolean {
       freeVar(u.body, used);
       const fresh = freshName(t.name, used);
       const newVar = varia(fresh);
-      return alphaEq(t.type, u.type)
-        && alphaEq(t.def, u.def)
-        && alphaEq(
-          subst(t.body, t.name, newVar),
-          subst(u.body, u.name, newVar)
-        );
+      const subt = subst(t.body, t.name, newVar);
+      const subu = subst(u.body, u.name, newVar);
+      if (!alphaEq(t.def, u.def))
+        return false;
+      if (!alphaEq(subt, subu))
+        return false;
+      if (t.type === undefined && u.type === undefined)
+        return true;
+      if (t.type === undefined || u.type === undefined)
+        return false;
+      return alphaEq(t.type, u.type);
     }
     case "App":
       return t.tag === u.tag

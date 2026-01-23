@@ -24,11 +24,11 @@ in
 <binder> ::= <open_binder> | <closed_binder>+
 <lam> ::= fun<binder>=><term>
 <pi> ::= forall<binder>,<type>
-<pair> ::= \<<term>,<term>\>
+<pair> ::= \<<term>,<term>\>(:<type>)?
 <sigma> ::= exist<binder>,<type>
-<let> ::= let<ident><closed_binder>*:<type>:=<term>in<term>
+<let> ::= let<ident><closed_binder>*(:<type>)?:=<term>in<term>
 <atom> ::= <sort> | <variable> | \(<term>\) | <pair>
-<proj> ::= <atom>(\.[01])*
+<proj> ::= <atom>(\.1 | \.2)*
 <app> ::= <app><proj> | <proj>
 <prod> ::= <prod>&<app> | <app>
 <array> ::= <prod>-><type> | <prod>
