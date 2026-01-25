@@ -1,7 +1,5 @@
+import { type Position, type Range } from "./pdef";
 import { type Result, succ, err } from "./result";
-
-export type Position = { line: number; col: number };
-export type Range = { start: Position; end: Position };
 
 export type TokenizerError =
   | { tag: "UnexpectedChar"; char: string; pos: Position }

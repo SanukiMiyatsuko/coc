@@ -1,6 +1,6 @@
-import { type Sort, type Name, type Term, sort, lam, pi, pair, fst, snd, sig, letIn, app, varia } from "./ast";
+import { type Sort, type Name } from "./pdef";
+import { type Term, sort, lam, pi, pair, fst, snd, sig, letIn, app, varia, type CtxElement, type Context, ctxElem, type JudgContext, judgCtx } from "./ast";
 import { type Result, succ, err, isErr } from "./result";
-import { type CtxElement, type Context, ctxVar, ctxDef, type JudgContext, judgCtx } from "./core";
 import { subst, alphaEq } from "./definition";
 
 type TypeError =
@@ -86,14 +86,14 @@ function ahEq(jc: JudgContext, t: Term, u: Term): boolean {
     const tname = tWhnf.name;
     const tbody = tWhnf.body;
     const local = jc.local.slice();
-    local.push(ctxVar(tname, tWhnf.type));
+    local.push(ctxElem(tname, tWhnf.type));
     return ahEq(judgCtx(jc.global, local), tbody, app(uWhnf, varia(tname)));
   }
   if (uWhnf.tag === "Lam") {
     const uname = uWhnf.name;
     const ubody = uWhnf.body;
     const local = jc.local.slice();
-    local.push(ctxVar(uname, uWhnf.type));
+    local.push(ctxElem(uname, uWhnf.type));
     return ahEq(judgCtx(jc.global, local), app(tWhnf, varia(uname)), ubody);
   }
   return alphaEq(tWhnf, uWhnf);
@@ -153,7 +153,7 @@ function typeInfer(jc: JudgContext, t: Term): Result<Term, TypeError> {
     }
     case "Lam": {
       const local = jc.local.slice();
-      local.push(ctxVar(t.name, t.type));
+      local.push(ctxElem(t.name, t.type));
       const bodyType = typeInfer(judgCtx(jc.global, local), t.body);
       if (isErr(bodyType))
         return bodyType;
@@ -174,7 +174,7 @@ function typeInfer(jc: JudgContext, t: Term): Result<Term, TypeError> {
       if (s0NF.tag !== "Sort")
         return err({ tag: "ExpectedSort", actual: s0NF });
       const local = jc.local.slice();
-      local.push(ctxVar(t.name, t.type));
+      local.push(ctxElem(t.name, t.type));
       const s1 = typeInfer(judgCtx(jc.global, local), t.body);
       if (isErr(s1))
         return s1;
@@ -225,7 +225,7 @@ function typeInfer(jc: JudgContext, t: Term): Result<Term, TypeError> {
       if (s0NF.tag !== "Sort")
         return err({ tag: "ExpectedSort", actual: s0NF });
       const local = jc.local.slice();
-      local.push(ctxVar(t.name, t.type));
+      local.push(ctxElem(t.name, t.type));
       const s1 = typeInfer(judgCtx(jc.global, local), t.body);
       if (isErr(s1))
         return s1;
@@ -255,7 +255,7 @@ function typeInfer(jc: JudgContext, t: Term): Result<Term, TypeError> {
         defType = defInfer.value;
       }
       const local = jc.local.slice();
-      local.push(ctxDef(t.name, defType, t.def));
+      local.push(ctxElem(t.name, defType, t.def));
       const bodyType = typeInfer(judgCtx(jc.global, local), t.body);
       if (isErr(bodyType))
         return bodyType;
@@ -294,7 +294,7 @@ function typeCheck(jc: JudgContext, t: Term, expected: Term): Result<true, TypeE
       if (isErr(sndCheck))
         return sndCheck;
       const local = jc.local.slice();
-      local.push(ctxVar(name, fstExpected));
+      local.push(ctxElem(name, fstExpected));
       const extendedJc = judgCtx(jc.global, local);
       const s = typeInfer(extendedJc, sndExpected);
       if (isErr(s))

@@ -20,8 +20,9 @@ in
 <sort> ::= Prop | Type
 <variable> ::= <ident>
 <open_binder> ::= <ident>+:<type>
-<closed_binder> ::= \(<open_binder>\)
-<binder> ::= <open_binder> | <closed_binder>+
+<var_only> ::= \(<open_binder>\)
+<closed_binder> ::= \(<ident>+:<type>\) | \(<ident>(:<type>)?:=<term>\)
+<binder> ::= <open_binder> | <var_only><closed_binder>*
 <lam> ::= fun<binder>=><term>
 <pi> ::= forall<binder>,<type>
 <pair> ::= \<<term>,<term>\>(:<type>)?

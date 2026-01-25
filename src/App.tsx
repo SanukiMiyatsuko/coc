@@ -1,13 +1,13 @@
 import { useState, useEffect, useTransition, useRef } from "react";
 import { CustomLanguageEditor } from "./editor"
 import "./app.css";
-import { type Term } from "./ast";
+import { type PGlobalContext } from "./pdef";
 import { err, isErr, succ, type Result } from "./result";
-import { type CtxElement, type JudgContext, judgCtx } from "./core";
 import { type TokenType, Tokenizer } from "./tokenize";
 import { Parser } from "./parse";
+import { type Term, type CtxElement, judgCtx } from "./ast";
 import { wellFormed } from "./typecheck";
-import { checkJudgContext } from "./context";
+import { elabGlobalContext } from "./trans";
 
 type Phase = "tokenize" | "parse" | "context" | "typecheck";
 
@@ -286,7 +286,7 @@ export default function App() {
   const [error, setError] = useState<UIError | null>(null);
   const [success, setSuccess] = useState<string>("");
   const [successDefs, setSuccessDefs] = useState<string[]>([]);
-  const [judgContext, setJudgContext] = useState<JudgContext>(judgCtx([], []));
+  const [pGlobalContext, setPGlobalContext] = useState<PGlobalContext>([]);
   const [isPending, startTransition] = useTransition();
   const runIdRef = useRef(0);
 
@@ -296,7 +296,7 @@ export default function App() {
   };
 
   const runUntilContext = (code: string): Result<true, UIError> => {
-    setJudgContext(judgCtx([], []));
+    setPGlobalContext([]);
     const tokenizer = new Tokenizer(code);
     const parser = new Parser(tokenizer);
     const ctxR = parser.parseProgram();
@@ -313,20 +313,36 @@ export default function App() {
                 : "コメントが閉じられていません。",
             detail: ctxR.err.error,
           });
+        case "Context": {
+          const e = ctxR.err.error;
+          let msg = "";
+          switch (e.tag) {
+            case "DuplicateGlobal":
+              msg = `グローバル定義 ${e.name} が重複しています。`;
+              break;
+            case "DuplicateLocal":
+              msg = `ローカル定義 ${e.name} が重複しています。`;
+              break;
+            case "SelfReference":
+              msg = `${e.kind} にて自分の名前 ${e.name} を参照しています。`;
+              break;
+            case "Undefined":
+              msg = `定義 ${e.in} の中で未定義の名前 ${e.name} (${e.kind}) が使われています。`;
+              break;
+            case "Cycle":
+              msg = "定義に循環依存があります:\n" +
+                e.path.map(p => `${p.from} → ${p.to} (${p.kind})`).join("\n");
+              break;
+          }
+          return err({
+            phase: "context",
+            title: "文脈エラー",
+            message: msg,
+            detail: e,
+          });
+        }
         case "UnexpectedToken":
           msg = `ここには ${tokenDesc(ctxR.err.expected)} が必要ですが、 ${tokenDesc(ctxR.err.actual.type)} が見つかりました。`;
-          break;
-        case "ExpectedBinder":
-          msg = `ここにはBinderが必要ですが、 ${ctxR.err.token.type} が見つかりました。`;
-          break;
-        case "ExtraneousDef":
-          msg = `不要な定義 ${showTerm(ctxR.err.def)} が検出されました。`;
-          break;
-        case "ExpectedAtom":
-          msg = `ここにはAtomが必要ですが、 ${ctxR.err.token.type} が検出されました。)`;
-          break;
-        case "ExpectedDef":
-          msg = `定義が必要な位置です。`;
           break;
       }
       return err({
@@ -336,44 +352,8 @@ export default function App() {
         detail: ctxR.err,
       });
     }
-    const ctx = ctxR.value;
-    const jc = judgCtx(ctx, []);
-    const ctxCheck = checkJudgContext(jc);
-    if (isErr(ctxCheck)) {
-      const e = ctxCheck.err;
-      let msg = "";
-      switch (e.tag) {
-        case "DuplicateGlobal":
-          msg = `グローバル定義 ${e.name} が重複しています。`;
-          break;
-        case "DuplicateLocal":
-          msg = `ローカル定義 ${e.name} が重複しています。`;
-          break;
-        case "SelfReference":
-          msg = `${e.kind} にて自分の名前 ${e.name} を参照しています。`;
-          break;
-        case "GlobalDependsOnLocal":
-          msg = `ローカル定義 ${e.to} (${e.kind}) にグローバル定義 ${e.from} が依存しています。`;
-          break;
-        case "ForwardDependency":
-          msg = `${e.from} は 現在未定義の${e.to} (${e.kind}) に依存しています。`;
-          break;
-        case "Undefined":
-          msg = `定義 ${e.in} の中で未定義の名前 ${e.name} (${e.kind}) が使われています。`;
-          break;
-        case "Cycle":
-          msg = "定義に循環依存があります:\n" +
-            e.path.map(p => `${p.from} → ${p.to} (${p.kind})`).join("\n");
-          break;
-      }
-      return err({
-        phase: "context",
-        title: "文脈エラー",
-        message: msg,
-        detail: e,
-      });
-    }
-    setJudgContext(jc);
+    const pctx = ctxR.value;
+    setPGlobalContext(pctx);
     return succ(true);
   }
 
@@ -393,9 +373,10 @@ export default function App() {
     setError(null);
     setSuccess("");
     setSuccessDefs([]);
-    const wf = wellFormed(judgContext);
-    for (const c of judgContext.global) {
-      console.log(showCtxElement(c));
+    const jc = judgCtx(elabGlobalContext(pGlobalContext), []);
+    const wf = wellFormed(jc);
+    for (const c of jc.global) {
+      console.log(c);
     }
     if (isErr(wf)) {
       let msg = "";
@@ -440,7 +421,7 @@ export default function App() {
       return;
     }
     setSuccess("✔ すべての定義は正しく型付けされました");
-    setSuccessDefs(judgContext.global.map(e => e.name));
+    setSuccessDefs(pGlobalContext.map(e => e.elem.name));
   };
 
   return (

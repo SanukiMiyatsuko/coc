@@ -1,4 +1,5 @@
-import { type Name, type Term, varia, lam, pi, pair, fst, snd, sig, letIn, app } from "./ast";
+import { type Name } from "./pdef";
+import { type Term, varia, lam, pi, pair, fst, snd, sig, letIn, app } from "./ast";
 
 export function freeVar(t: Term, acc: Set<Name> = new Set()): Set<Name> {
   switch (t.tag) {
