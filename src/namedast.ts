@@ -1,4 +1,4 @@
-import { type Name, type Sort } from "./pdef";
+import type { Name, Range, Sort } from "./pdef";
 
 export type Term =
   | { tag: "Sort"; name: Sort }
@@ -23,19 +23,11 @@ export const sig = (name: Name, type: Term, body: Term): Term => ({ tag: "Sig", 
 export const letIn = (name: Name, type: Term | undefined, def: Term, body: Term): Term => ({ tag: "Let", name, type, def, body });
 export const app = (fun: Term, arg: Term): Term => ({ tag: "App", fun, arg });
 
-export type CtxElement =
-  | { tag: "Var"; name: Name; type: Term }
-  | { tag: "Def"; name: Name; type: Term; def: Term };
+export type GlobalElement =
+  | { tag: "Var"; name: Name; type: Term; range: Range }
+  | { tag: "Def"; name: Name; type: Term; def: Term; range: Range };
 
-export type Context = CtxElement[];
+export type GlobalContext = GlobalElement[];
 
-export const ctxElem = (name: Name, type: Term, def?: Term): CtxElement =>
-  def ? { tag: "Def", name, type, def } : { tag: "Var", name, type };
-
-export type JudgContext = { global: Context; local: Context };
-
-export const judgCtx = (global: Context, local: Context): JudgContext => ({ global, local });
-
-export type Judgment =
-  | { tag: "nomal"; context: JudgContext; term: Term; type: Term }
-  | { tag: "WF"; context: JudgContext };
+export const globalElem = (name: Name, type: Term, def: Term | undefined, range: Range): GlobalElement =>
+  def ? { tag: "Def", name, type, def, range } : { tag: "Var", name, type, range };

@@ -1,5 +1,5 @@
 import { type Position, type Range } from "./pdef";
-import { type Result, succ, err } from "./result";
+import { type Result, succ, err, isErr } from "./result";
 
 export type TokenizerError =
   | { tag: "UnexpectedChar"; char: string; pos: Position }
@@ -72,8 +72,8 @@ const patterns: Pattern[] = [
 export class Tokenizer {
   private src: string;
   private pos = 0;
-  private line = 1;
-  private col = 1;
+  private line = 0;
+  private character = 0;
 
   constructor(src: string) {
     this.src = src.replace(/\r\n|\r/g, "\n");
@@ -87,16 +87,16 @@ export class Tokenizer {
     for (const ch of text) {
       if (ch === "\n") {
         this.line++;
-        this.col = 1;
+        this.character = 0;
       } else {
-        this.col++;
+        this.character++;
       }
     }
     this.pos += text.length;
   }
 
   private currentPosition(): Position {
-    return { line: this.line, col: this.col };
+    return { line: this.line, character: this.character };
   }
 
   next(): Result<Token, TokenizerError> {
@@ -142,4 +142,18 @@ export class Tokenizer {
       pos: this.currentPosition(),
     });
   }
+}
+
+export function tokenizeAll(src: string): Token[] {
+  const t = new Tokenizer(src);
+  const tokens: Token[] = [];
+  while (true) {
+    const r = t.next();
+    if (isErr(r))
+      break;
+    tokens.push(r.value);
+    if (r.value.type === "EOF")
+      break;
+  }
+  return tokens;
 }

@@ -1,12 +1,12 @@
-import { type CtxError, checkGlobalContext } from "./context";
-import { type Name, type Range, type PType, type Binder, type PTerm, varBinder, Sort, Variable, Lambda, Pi, Arrow, Pair, First, Second, Sigma, Prod, Let, Apply, pVarElem, pDefElem, defBinder, type PGlobalContext, type PLocalContext, pGlobalElem, pGlobal, type VarBinder, type PGlobalElement } from "./pdef";
+import { buildGlobalScope, type ContextError } from "./context";
+import { type Name, type Range, type PType, type Binder, type PTerm, varBinder, Sort, Variable, Lambda, Pi, Arrow, Pair, First, Second, Sigma, Prod, Let, Apply, defBinder, type PGlobalContext, pGlobalElem, type Scope, type PGlobalElement } from "./pdef";
 import { type Result, succ, err, isErr, isSucc } from "./result";
 import { type TokenizerError, type Tokenizer, type TokenType, type Token } from "./tokenize";
 
-type ParseError =
-  | { tag: "Tokenizer"; error: TokenizerError }
-  | { tag: "Context"; error: CtxError }
-  | { tag: "UnexpectedToken"; expected: TokenType; actual: Token };
+export type ParseError =
+  | { tag: "Tokenizer"; error: TokenizerError; range: Range }
+  | { tag: "Context"; error: ContextError; range: Range }
+  | { tag: "UnexpectedToken"; expected: TokenType; actual: Token; range: Range };
 
 export type ParseNode = {
   id: number;
@@ -17,8 +17,15 @@ export type ParseNode = {
   error?: ParseError;
 };
 
+export type ParseResult = {
+  tokens: Token[];
+  context: PGlobalContext;
+  scope: Scope;
+}
+
 export class Parser {
   private tokenizer: Tokenizer;
+  private tokens: Token[] = [];
   private curr!: Token;
   private prev!: Token;
   private traceStack: ParseNode[] = [];
@@ -37,10 +44,15 @@ export class Parser {
   private advance(): Result<void, ParseError> {
     const res = this.tokenizer.next();
     if (isErr(res)) {
-      return err({ tag: "Tokenizer", error: res.err });
+      return err({
+        tag: "Tokenizer",
+        error: res.err,
+        range: { start: res.err.pos, end: res.err.pos }
+      });
     }
     this.prev = this.curr;
     this.curr = res.value;
+    this.tokens.push(res.value);
     return succ(undefined);
   }
 
@@ -84,6 +96,7 @@ export class Parser {
         tag: "UnexpectedToken",
         expected: type,
         actual: t,
+        range: t.range
       });
     const adv = this.advance();
     if (isErr(adv))
@@ -91,7 +104,7 @@ export class Parser {
     return succ(t);
   }
 
-  private parseOpenBinder(): Result<VarBinder, ParseError> {
+  private parseOpenBinder(): Result<Binder, ParseError> {
     return this.withNode("parseOpenBinder", () => {
       const start = this.curr.range.start;
       const name = this.expect("IDENT");
@@ -114,24 +127,6 @@ export class Parser {
         return type;
       const end = this.prev.range.end;
       return succ(varBinder(names, type.value, { start, end }));
-    });
-  }
-
-  private parseVariableBinder(): Result<VarBinder, ParseError> {
-    return this.withNode("parseVariableBinder", () => {
-      const start = this.curr.range.start;
-      const lparen = this.expect("LPAREN");
-      if (isErr(lparen))
-        return lparen;
-      const open_binder = this.parseOpenBinder();
-      if (isErr(open_binder))
-        return open_binder;
-      const { names, type } = open_binder.value;
-      const rparen = this.expect("RPAREN");
-      if (isErr(rparen))
-        return rparen;
-      const end = this.prev.range.end;
-      return succ(varBinder(names, type, { start, end }));
     });
   }
 
@@ -165,7 +160,7 @@ export class Parser {
         if (isErr(rparen))
           return rparen;
         const end = this.prev.range.end;
-        return succ(varBinder(names, type.value, { start, end }) as Binder);
+        return succ(varBinder(names, type.value, { start, end }));
       }
       if (isSucc(this.expect("ASSIGN"))) {
         const def = this.parseTerm();
@@ -175,7 +170,7 @@ export class Parser {
         if (isErr(rparen))
           return rparen;
         const end = this.prev.range.end;
-        return succ(defBinder(name, undefined, def.value, { start, end }) as Binder);
+        return succ(defBinder(name, undefined, def.value, { start, end }));
       }
       const colon = this.expect("COLON");
       if (isErr(colon))
@@ -185,7 +180,7 @@ export class Parser {
         return type;
       if (isSucc(this.expect("RPAREN"))) {
         const end = this.prev.range.end;
-        return succ(varBinder([name], type.value, { start, end }) as Binder);
+        return succ(varBinder([name], type.value, { start, end }));
       }
       const assign = this.expect("ASSIGN");
       if (isErr(assign))
@@ -197,7 +192,7 @@ export class Parser {
       if (isErr(rparen))
         return rparen;
       const end = this.prev.range.end;
-      return succ(defBinder(name, type.value, def.value, { start, end }) as Binder);
+      return succ(defBinder(name, type.value, def.value, { start, end }));
     });
   }
 
@@ -210,7 +205,7 @@ export class Parser {
           return open_binder;
         return succ([open_binder.value]);
       }
-      const binder = this.parseVariableBinder();
+      const binder = this.parseClosedBinder();
       if (isErr(binder))
         return binder;
       const binders: Binder[] = [binder.value];
@@ -506,7 +501,7 @@ export class Parser {
     });
   }
 
-  private parseDef(): Result<{ elem: PGlobalElement, binders: Binder[] }, ParseError> {
+  private parseDef(): Result<PGlobalElement, ParseError> {
     return this.withNode("parseDef", () => {
       const start = this.curr.range.start;
       if (isSucc(this.expect("RES_DEF"))) {
@@ -531,9 +526,11 @@ export class Parser {
         if (isErr(semicolon))
           return semicolon;
         const end = this.prev.range.end;
-        const elem = pGlobalElem(name, type.value, def.value, { start, end });
-        return succ({ elem, binders });
+        return succ(pGlobalElem(name, binders, type.value, def.value, { start, end }));
       }
+      const res_var = this.expect("RES_VAR");
+      if (isErr(res_var))
+        return res_var;
       const nameBinders = this.parseToEndOfBinder();
       if (isErr(nameBinders))
         return nameBinders;
@@ -549,34 +546,27 @@ export class Parser {
       if (isErr(semicolon))
         return semicolon;
       const end = this.prev.range.end;
-      const elem = pGlobalElem(name, type.value, undefined, { start, end });
-      return succ({ elem, binders });
+      return succ(pGlobalElem(name, binders, type.value, undefined, { start, end }));
     });
   }
 
-  parseProgram(): Result<PGlobalContext, ParseError> {
+  parseProgram(): Result<ParseResult, ParseError> {
     return this.withNode("parseProgram", () => {
-      const defs: PGlobalContext = [];
+      const globals: PGlobalContext = [];
       while (this.curr.type !== "EOF") {
-        const def = this.parseDef();
-        if (isErr(def))
-          return def;
-        const local: PLocalContext = [];
-        for (const e of def.value.binders) {
-          if (e.tag === "Var")
-            for (const n of e.names) {
-              local.push(pVarElem(n, e.type, e.range));
-            }
-          if (e.tag === "Def")
-            local.push(pDefElem(e.name, e.type, e.def, e.range));
-        }
-        const global = pGlobal(def.value.elem, local);
-        defs.push(global);
+        const g = this.parseDef();
+        if (isErr(g))
+          return g;
+        globals.push(g.value);
       }
-      const cj = checkGlobalContext(defs);
-      if (isErr(cj))
-        return err({ tag: "Context", error: cj.err });
-      return succ(defs);
+      const scope = buildGlobalScope(globals);
+      if (isErr(scope))
+        return err({
+          tag: "Context",
+          error: scope.err,
+          range: scope.err.range
+        });
+      return succ({ tokens: this.tokens.slice(), context: globals, scope: scope.value });
     });
   }
 }

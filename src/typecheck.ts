@@ -1,136 +1,144 @@
 import { type Sort, type Name } from "./pdef";
-import { type Term, sort, lam, pi, pair, fst, snd, sig, letIn, app, varia, type CtxElement, type Context, ctxElem, type JudgContext, judgCtx } from "./ast";
+import { type Term, sort, pi, fst, snd, sig, app, type GlobalElement, type GlobalContext, type JudgContext, judgCtx, bind, type LocalContext } from "./indexast";
 import { type Result, succ, err, isErr } from "./result";
-import { subst, alphaEq } from "./definition";
+import { eq, shift, subst } from "./indexdef";
 
 type TypeError =
   | { tag: "TypeHasNoType" }
-  | { tag: "UnboundVariable"; name: Name }
+  | { tag: "UnboundVariableName"; name: Name }
+  | { tag: "UnboundVariableIndex"; index: number }
   | { tag: "ExpectedSort"; actual: Term }
   | { tag: "ImpossibleCombination", sort0: Sort, sort1: Sort }
   | { tag: "ExpectedPi"; fun: Term; actual: Term }
   | { tag: "ExpectedSigma"; pair: Term; actual: Term }
   | { tag: "TypeMismatch"; expected: Term; actual: Term };
 
-type WFError = { error: TypeError; at: CtxElement };
+type WFError = { error: TypeError; at: GlobalElement };
 
-function dszNF(jc: JudgContext, t: Term): Term {
+function pushLocal(jc: JudgContext, type: Term, def?: Term): JudgContext {
+  if (def)
+    return {
+      ...jc,
+      local: [{ tag: "Def", type, def }, ...jc.local]
+    };
+  return {
+    ...jc,
+    local: [{ tag: "Var", type }, ...jc.local]
+  };
+}
+
+function whNF(jc: JudgContext, t: Term): Term {
   switch (t.tag) {
-    case "Sort":
-      return t;
-    case "Var": {
-      const le = jc.local.slice().reverse().find(e => e.name === t.name);
-      if (le && le.tag === "Def")
-        return dszNF(jc, le.def);
+    case "Free": {
       const ge = jc.global.slice().reverse().find(e => e.name === t.name);
       if (ge && ge.tag === "Def")
-        return dszNF(jc, ge.def);
+        return whNF(jc, ge.def);
       return t;
     }
-    case "Lam":
-      return lam(t.name, dszNF(jc, t.type), dszNF(jc, t.body));
-    case "Pi":
-      return pi(t.name, dszNF(jc, t.type), dszNF(jc, t.body));
-    case "Pair":
-      return pair(dszNF(jc, t.fst), dszNF(jc, t.snd), t.as ? dszNF(jc, t.as) : undefined);
+    case "Bind": {
+      const le = jc.local[t.index];
+      if (le && le.tag === "Def")
+        return whNF(jc, shift(le.def, t.index + 1, 0));
+      return t;
+    }
     case "Fst": {
-      if (t.pair.tag === "Pair")
-        return dszNF(jc, t.pair.fst);
-      return fst(dszNF(jc, t.pair));
+      const pair = whNF(jc, t.pair);
+      if (pair.tag === "Pair")
+        return whNF(jc, pair.fst);
+      return fst(pair);
     }
     case "Snd": {
-      if (t.pair.tag === "Pair")
-        return dszNF(jc, t.pair.snd);
-      return snd(dszNF(jc, t.pair));
+      const pair = whNF(jc, t.pair);
+      if (pair.tag === "Pair")
+        return whNF(jc, pair.snd);
+      return snd(pair);
     }
-    case "Sig":
-      return sig(t.name, dszNF(jc, t.type), dszNF(jc, t.body));
     case "Let":
-      return dszNF(jc, subst(t.body, t.name, t.def));
-    case "App":
-      return app(dszNF(jc, t.fun), dszNF(jc, t.arg));
-  }
-}
-
-function headNF(t: Term): Term {
-  switch (t.tag) {
-    case "Sort":
-    case "Var":
-    case "Lam":
-      return t;
-    case "Pi":
-      return pi(t.name, headNF(t.type), headNF(t.body));
-    case "Pair":
-      return pair(headNF(t.fst), headNF(t.snd), t.as ? headNF(t.as) : undefined);
-    case "Fst":
-      return fst(headNF(t.pair));
-    case "Snd":
-      return snd(headNF(t.pair));
-    case "Sig":
-      return sig(t.name, headNF(t.type), headNF(t.body));
-    case "Let":
-      return letIn(t.name, t.type ? headNF(t.type) : undefined, headNF(t.def), headNF(t.body));
+      return whNF(jc, shift(subst(t.body, 0, shift(t.def, 1, 0)), -1, 0));
     case "App": {
-      const fun = headNF(t.fun);
+      const fun = whNF(jc, t.fun);
       if (fun.tag === "Lam")
-        return headNF(subst(fun.body, fun.name, t.arg));
+        return whNF(jc, shift(subst(fun.body, 0, shift(t.arg, 1, 0)), -1, 0));
       return app(fun, t.arg);
     }
+    default:
+      return t;
   }
 }
 
-function ahEq(jc: JudgContext, t: Term, u: Term): boolean {
-  const tWhnf = headNF(dszNF(jc, t));
-  const uWhnf = headNF(dszNF(jc, u));
-  if (tWhnf.tag === "Lam") {
-    const tname = tWhnf.name;
-    const tbody = tWhnf.body;
-    const local = jc.local.slice();
-    local.push(ctxElem(tname, tWhnf.type));
-    return ahEq(judgCtx(jc.global, local), tbody, app(uWhnf, varia(tname)));
+function convWhNF(jc: JudgContext, t0: Term, t1: Term): boolean {
+  const w0 = whNF(jc, t0);
+  const w1 = whNF(jc, t1);
+  if (w0.tag === "Lam" && w1.tag !== "Lam")
+    return conv(pushLocal(jc, w0.type), w0.body, app(shift(w1, 1, 0), bind(0)));
+  if (w0.tag !== "Lam" && w1.tag === "Lam")
+    return conv(pushLocal(jc, w1.type), app(shift(w0, 1, 0), bind(0)), w1.body);
+  if (w0.tag === "Pair" && w1.tag !== "Pair")
+    return conv(jc, w0.fst, fst(w1))
+      && conv(jc, w0.snd, snd(w1));
+  if (w0.tag !== "Pair" && w1.tag === "Pair")
+    return conv(jc, fst(w0), w1.fst)
+      && conv(jc, snd(w0), w1.snd);
+  if (eq(w0, w1))
+    return true;
+  switch (w0.tag) {
+    case "Lam":
+    case "Pi":
+    case "Sig": {
+      return w0.tag === w1.tag
+        && conv(jc, w0.type, w1.type)
+        && conv(pushLocal(jc, w0.type), w0.body, w1.body);
+    }
+    case "Pair": {
+      if (w0.tag !== w1.tag)
+        return false;
+      if (!conv(jc, w0.fst, w1.fst))
+        return false;
+      if (!conv(jc, w0.snd, w1.snd))
+        return false;
+      if (w0.as === undefined && w1.as === undefined)
+        return true;
+      if (w0.as === undefined || w1.as === undefined)
+        return false;
+      return conv(jc, w0.as, w1.as);
+    }
+    case "Fst":
+    case "Snd": {
+      return w0.tag === w1.tag
+        && conv(jc, w0.pair, w1.pair);
+    }
+    case "App": {
+      return w0.tag === w1.tag
+        && conv(jc, w0.fun, w1.fun)
+        && conv(jc, w0.arg, w1.arg);
+    }
   }
-  if (uWhnf.tag === "Lam") {
-    const uname = uWhnf.name;
-    const ubody = uWhnf.body;
-    const local = jc.local.slice();
-    local.push(ctxElem(uname, uWhnf.type));
-    return ahEq(judgCtx(jc.global, local), app(tWhnf, varia(uname)), ubody);
-  }
-  return alphaEq(tWhnf, uWhnf);
+  return false;
 }
 
-export function wellFormed(jc: JudgContext): Result<true, WFError> {
-  const g: Context = [];
-  const l: Context = [];
-  const check = (ctx: JudgContext, e: CtxElement): Result<true, WFError> => {
+function conv(jc: JudgContext, t0: Term, t1: Term): boolean {
+  if (eq(t0, t1))
+    return true;
+  return convWhNF(jc, t0, t1);
+}
+
+function wellFormedLocal(jc: JudgContext): Result<true, TypeError> {
+  const l: LocalContext = [];
+  for (let idx = jc.local.length - 1; idx >= 0; idx--) {
+    const e = jc.local[idx];
+    const ctx = judgCtx(jc.global, l);
     if (e.tag === "Var") {
       const r = typeInfer(ctx, e.type);
       if (isErr(r))
-        return err({ error: r.err, at: e });
+        return r;
       if (r.value.tag !== "Sort")
-        return err({
-          error: { tag: "ExpectedSort", actual: r.value },
-          at: e,
-        });
-      return succ(true);
+        return err({ tag: "ExpectedSort", actual: r.value });
     } else {
       const r = typeCheck(ctx, e.def, e.type);
       if (isErr(r))
-        return err({ error: r.err, at: e });
-      return succ(true);
+        return r;
     }
-  };
-  for (const e of jc.global) {
-    const r = check(judgCtx(g, l), e);
-    if (isErr(r))
-      return r;
-    g.push(e);
-  }
-  for (const e of jc.local) {
-    const r = check(judgCtx(g, l), e);
-    if (isErr(r))
-      return r;
-    l.push(e);
+    l.unshift(e);
   }
   return succ(true);
 }
@@ -138,50 +146,57 @@ export function wellFormed(jc: JudgContext): Result<true, WFError> {
 function typeInfer(jc: JudgContext, t: Term): Result<Term, TypeError> {
   switch (t.tag) {
     case "Sort": {
+      const wf = wellFormedLocal(jc);
+      if (isErr(wf))
+        return wf;
       if (t.name === "Type")
         return err({ tag: "TypeHasNoType" });
       return succ(sort("Type"));
     }
-    case "Var": {
-      const le = jc.local.slice().reverse().find(e => e.name === t.name);
-      if (le)
-        return succ(le.type);
+    case "Free": {
       const ge = jc.global.slice().reverse().find(e => e.name === t.name);
       if (ge)
         return succ(ge.type);
-      return err({ tag: "UnboundVariable", name: t.name });
+      return err({ tag: "UnboundVariableName", name: t.name });
+    }
+    case "Bind": {
+      const wf = wellFormedLocal(jc);
+      if (isErr(wf))
+        return wf;
+      const le = jc.local[t.index];
+      if (le)
+        return succ(shift(le.type, t.index + 1, 0));
+      return err({ tag: "UnboundVariableIndex", index: t.index });
     }
     case "Lam": {
-      const local = jc.local.slice();
-      local.push(ctxElem(t.name, t.type));
-      const bodyType = typeInfer(judgCtx(jc.global, local), t.body);
+      const newJc = pushLocal(jc, t.type);
+      const bodyType = typeInfer(newJc, t.body);
       if (isErr(bodyType))
         return bodyType;
-      const termType = pi(t.name, t.type, bodyType.value);
+      const termType = pi(t.type, bodyType.value);
       const s = typeInfer(jc, termType);
       if (isErr(s))
         return s;
-      const sNF = headNF(dszNF(jc, s.value));
-      if (sNF.tag !== "Sort")
-        return err({ tag: "ExpectedSort", actual: sNF });
+      const sWhNF = whNF(jc, s.value);
+      if (sWhNF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: sWhNF });
       return succ(termType);
     }
     case "Pi": {
       const s0 = typeInfer(jc, t.type);
       if (isErr(s0))
         return s0;
-      const s0NF = headNF(dszNF(jc, s0.value));
-      if (s0NF.tag !== "Sort")
-        return err({ tag: "ExpectedSort", actual: s0NF });
-      const local = jc.local.slice();
-      local.push(ctxElem(t.name, t.type));
-      const s1 = typeInfer(judgCtx(jc.global, local), t.body);
+      const s0WhNF = whNF(jc, s0.value);
+      if (s0WhNF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: s0WhNF });
+      const newJc = pushLocal(jc, t.type);
+      const s1 = typeInfer(newJc, t.body);
       if (isErr(s1))
         return s1;
-      const s1NF = headNF(dszNF(jc, s1.value));
-      if (s1NF.tag !== "Sort")
-        return err({ tag: "ExpectedSort", actual: s1NF });
-      return succ(s1NF);
+      const s1WhNF = whNF(jc, s1.value);
+      if (s1WhNF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: s1WhNF });
+      return succ(s1WhNF);
     }
     case "Pair": {
       if (t.as) {
@@ -196,50 +211,55 @@ function typeInfer(jc: JudgContext, t: Term): Result<Term, TypeError> {
         const secondType = typeInfer(jc, t.snd);
         if (isErr(secondType))
           return secondType;
-        return succ(sig("_", firstType.value, secondType.value));
+        const sigma = sig(firstType.value, shift(secondType.value, 1, 0));
+        const s = typeInfer(jc, sigma);
+        if (isErr(s))
+          return s;
+        const sWhNF = whNF(jc, s.value);
+        if (sWhNF.tag !== "Sort")
+          return err({ tag: "ExpectedSort", actual: sWhNF });
+        return succ(sigma);
       }
     }
     case "Fst": {
       const pairType = typeInfer(jc, t.pair);
       if (isErr(pairType))
         return pairType;
-      const pairTypeNF = headNF(dszNF(jc, pairType.value));
-      if (pairTypeNF.tag !== "Sig")
-        return err({ tag: "ExpectedSigma", pair: t.pair, actual: pairTypeNF });
-      return succ(pairTypeNF.type);
+      const pairTypeWhNF = whNF(jc, pairType.value);
+      if (pairTypeWhNF.tag !== "Sig")
+        return err({ tag: "ExpectedSigma", pair: t.pair, actual: pairTypeWhNF });
+      return succ(pairTypeWhNF.type);
     }
     case "Snd": {
       const pairType = typeInfer(jc, t.pair);
       if (isErr(pairType))
         return pairType;
-      const pairTypeNF = headNF(dszNF(jc, pairType.value));
-      if (pairTypeNF.tag !== "Sig")
-        return err({ tag: "ExpectedSigma", pair: t.pair, actual: pairTypeNF });
-      return succ(subst(pairTypeNF.body, pairTypeNF.name, fst(t.pair)));
+      const pairTypeWhNF = whNF(jc, pairType.value);
+      if (pairTypeWhNF.tag !== "Sig")
+        return err({ tag: "ExpectedSigma", pair: t.pair, actual: pairTypeWhNF });
+      return succ(shift(subst(pairTypeWhNF.body, 0, shift(fst(t.pair), 1, 0)), -1, 0));
     }
     case "Sig": {
       const s0 = typeInfer(jc, t.type);
       if (isErr(s0))
         return s0;
-      const s0NF = headNF(dszNF(jc, s0.value));
-      if (s0NF.tag !== "Sort")
-        return err({ tag: "ExpectedSort", actual: s0NF });
-      const local = jc.local.slice();
-      local.push(ctxElem(t.name, t.type));
-      const s1 = typeInfer(judgCtx(jc.global, local), t.body);
+      const s0WhNF = whNF(jc, s0.value);
+      if (s0WhNF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: s0WhNF });
+      const newJc = pushLocal(jc, t.type);
+      const s1 = typeInfer(newJc, t.body);
       if (isErr(s1))
         return s1;
-      const s1NF = headNF(dszNF(jc, s1.value));
-      if (s1NF.tag !== "Sort")
-        return err({ tag: "ExpectedSort", actual: s1NF });
-      if ((s0NF.name === "Prop" && s1NF.name === "Prop")
-        || s1NF.name === "Type")
-        return succ(s1NF);
-      return err({
-        tag: "ImpossibleCombination",
-        sort0: s0NF.name,
-        sort1: s1NF.name,
-      });
+      const s1WhNF = whNF(jc, s1.value);
+      if (s1WhNF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: s1WhNF });
+      if (s0WhNF.name === "Type" && s1WhNF.name === "Prop")
+        return err({
+          tag: "ImpossibleCombination",
+          sort0: "Type",
+          sort1: "Prop",
+        });
+      return succ(s1WhNF);
     }
     case "Let": {
       let defType: Term;
@@ -254,63 +274,81 @@ function typeInfer(jc: JudgContext, t: Term): Result<Term, TypeError> {
           return defInfer;
         defType = defInfer.value;
       }
-      const local = jc.local.slice();
-      local.push(ctxElem(t.name, defType, t.def));
-      const bodyType = typeInfer(judgCtx(jc.global, local), t.body);
+      const newJc = pushLocal(jc, defType, t.def);
+      const bodyType = typeInfer(newJc, t.body);
       if (isErr(bodyType))
         return bodyType;
-      return succ(subst(bodyType.value, t.name, t.def));
+      return succ(shift(subst(bodyType.value, 0, shift(t.def, 1, 0)), -1, 0));
     }
     case "App": {
       const funType = typeInfer(jc, t.fun);
       if (isErr(funType))
         return funType;
-      const funTypeNF = headNF(dszNF(jc, funType.value));
-      if (funTypeNF.tag !== "Pi")
-        return err({ tag: "ExpectedPi", fun: t.fun, actual: funTypeNF });
+      const funTypeWhNF = whNF(jc, funType.value);
+      if (funTypeWhNF.tag !== "Pi")
+        return err({ tag: "ExpectedPi", fun: t.fun, actual: funTypeWhNF });
       const argType = typeInfer(jc, t.arg);
       if (isErr(argType))
         return argType;
-      if (!ahEq(jc, argType.value, funTypeNF.type))
-        return err({ tag: "TypeMismatch", expected: funTypeNF.type, actual: argType.value });
-      return succ(subst(funTypeNF.body, funTypeNF.name, t.arg));
+      if (!conv(jc, argType.value, funTypeWhNF.type))
+        return err({ tag: "TypeMismatch", expected: argType.value, actual: funTypeWhNF.type });
+      return succ(shift(subst(funTypeWhNF.body, 0, shift(t.arg, 1, 0)), -1, 0));
     }
   }
 }
 
 function typeCheck(jc: JudgContext, t: Term, expected: Term): Result<true, TypeError> {
+  const expectedWhNF = whNF(jc, expected);
   switch (t.tag) {
     case "Pair": {
-      const expectedNF = headNF(dszNF(jc, expected));
-      if (expectedNF.tag !== "Sig")
-        return err({ tag: "ExpectedSigma", pair: t, actual: expectedNF });
-      const name = expectedNF.name;
-      const fstExpected = expectedNF.type
+      if (expectedWhNF.tag !== "Sig")
+        return err({ tag: "ExpectedSigma", pair: t, actual: expectedWhNF });
+      const fstExpected = expectedWhNF.type
       const fstCheck = typeCheck(jc, t.fst, fstExpected);
       if (isErr(fstCheck))
         return fstCheck;
-      const sndExpected = subst(expectedNF.body, expectedNF.name, t.fst);
+      const sndExpected = shift(subst(expectedWhNF.body, 0, shift(t.fst, 1, 0)), -1, 0);
       const sndCheck = typeCheck(jc, t.snd, sndExpected);
       if (isErr(sndCheck))
         return sndCheck;
-      const local = jc.local.slice();
-      local.push(ctxElem(name, fstExpected));
-      const extendedJc = judgCtx(jc.global, local);
-      const s = typeInfer(extendedJc, sndExpected);
+      const newJc = pushLocal(jc, fstExpected);
+      const s = typeInfer(newJc, shift(sndExpected, 1, 0));
       if (isErr(s))
         return s;
-      const sNF = headNF(dszNF(extendedJc, s.value));
-      if (sNF.tag !== "Sort")
-        return err({ tag: "ExpectedSort", actual: sNF });
+      const sWhNF = whNF(jc, s.value);
+      if (sWhNF.tag !== "Sort")
+        return err({ tag: "ExpectedSort", actual: sWhNF });
       return succ(true);
     }
     default: {
       const inferred = typeInfer(jc, t);
       if (isErr(inferred))
         return inferred;
-      if (!ahEq(jc, inferred.value, expected))
-        return err({ tag: "TypeMismatch", expected, actual: inferred.value });
+      if (!conv(jc, inferred.value, expectedWhNF))
+        return err({ tag: "TypeMismatch", expected: inferred.value, actual: expectedWhNF });
       return succ(true);
     }
   }
+}
+
+export function wellFormedGlobal(global: GlobalContext): Result<true, WFError> {
+  const g: GlobalContext = [];
+  for (const e of global) {
+    if (e.tag === "Var") {
+      const r = typeInfer(judgCtx(g, []), e.type);
+      if (isErr(r))
+        return err({ error: r.err, at: e });
+      if (r.value.tag !== "Sort")
+        return err({
+          error: { tag: "ExpectedSort", actual: r.value },
+          at: e
+        });
+    } else {
+      const r = typeCheck(judgCtx(g, []), e.def, e.type);
+      if (isErr(r))
+        return err({ error: r.err, at: e });
+    }
+    g.push(e);
+  }
+  return succ(true);
 }

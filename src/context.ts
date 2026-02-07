@@ -1,196 +1,376 @@
-import { pFreeVariables, type PLocalElement, type PGlobalContext, type Range, type Name, type PGlobal } from "./pdef";
+import { type PGlobalContext, type Range, type Name, type Scope, newScope, pVarElem, Pi, Lambda, pDefElem, type PGlobalElement, type PTerm, type Binder, type Place } from "./pdef";
 import { type Result, succ, err, isErr } from "./result";
 
-type DepKind = "type" | "def";
+type DepKind = "Type" | "Def";
 
-export type CtxError =
-  | { tag: "DuplicateGlobal"; name: Name; range: Range }
-  | { tag: "DuplicateLocal"; name: Name; range: Range }
-  | { tag: "SelfReference"; name: Name; kind: DepKind; range: Range }
-  | { tag: "Undefined"; name: Name; in: Name; kind: DepKind; range: Range }
-  | { tag: "Cycle"; path: { from: Name; to: Name; kind: DepKind }[]; range: Range };
+export type ContextError =
+  | { tag: "Undefined"; place: Place; kind: DepKind; name: Name; range: Range }
+  | { tag: "Duplicate"; place: Place; name: Name; range: Range };
 
-type Dependency = { to: Name; kind: DepKind };
-type DepGraph = Map<string, Dependency[]>;
-type GlobalInfos = Set<Name>;
-type RangeMap = Map<string, Range>;
-
-function globalDepsOf(ge: PGlobal): Dependency[] {
-  const bound = new Set<Name>();
-  for (const e of ge.local) {
-    bound.add(e.name);
-  };
-  const deps: Dependency[] = [];
-  for (const v of pFreeVariables(ge.elem.type)) {
-    if (!bound.has(v))
-      deps.push({ to: v, kind: "type" });
-  }
-  if (ge.elem.tag === "Def")
-    for (const v of pFreeVariables(ge.elem.def)) {
-      if (!bound.has(v))
-        deps.push({ to: v, kind: "def" });
+function lookup(scope: Scope | null, name: Name): boolean {
+  let cur = scope;
+  while (cur) {
+    for (const e of cur.context) {
+      if (e.name === name)
+        return true;
     }
-  return deps;
+    cur = cur.parent;
+  }
+  return false;
 }
 
-function localDepsOf(e: PLocalElement): Dependency[] {
-  const deps: Dependency[] = [];
-  if (e.tag === "Var")
-    for (const v of pFreeVariables(e.type)) {
-      deps.push({ to: v, kind: "type" });
-    }
-  if (e.tag === "Def") {
-    if (e.type)
-      for (const v of pFreeVariables(e.type)) {
-        deps.push({ to: v, kind: "type" });
-      }
-    for (const v of pFreeVariables(e.def)) {
-      deps.push({ to: v, kind: "def" });
-    }
+function checkVariable(
+  scope: Scope,
+  name: Name,
+  range: Range
+): Result<true, ContextError> {
+  if (!lookup(scope, name)) {
+    return err({
+      tag: "Undefined",
+      place: scope.tag,
+      kind: "Type",
+      name,
+      range,
+    });
   }
-  return deps;
+  return succ(true);
 }
 
-function buildDefInfo(ctx: PGlobalContext): Result<GlobalInfos, CtxError> {
-  const globals: GlobalInfos = new Set();
-  for (const ge of ctx) {
-    const elem = ge.elem
-    if (globals.has(elem.name))
-      return err({ tag: "DuplicateGlobal", name: elem.name, range: elem.range });
-    const local: Name[] = [];
-    for (const e of ge.local) {
-      if (local.find(x => x === e.name))
-        return err({ tag: "DuplicateLocal", name: e.name, range: e.range });
-      local.push(e.name);
-    }
-    globals.add(elem.name);
-  }
-  return succ(globals);
-}
-
-function buildDepGraph(ctx: PGlobalContext, info: GlobalInfos): Result<{ graph: DepGraph; rangeMap: RangeMap }, CtxError> {
-  const graph: DepGraph = new Map();
-  const rangeMap: RangeMap = new Map();
-  for (const g of ctx) {
-    const gNode = `global:${g.elem.name}`;
-    const globalDeps = globalDepsOf(g);
-    for (const dep of globalDeps) {
-      if (dep.to === g.elem.name)
-        return err({
-          tag: "SelfReference",
-          name: g.elem.name,
-          kind: dep.kind,
-          range: g.elem.range
-        });
-      if (!info.has(dep.to))
-        return err({
-          tag: "Undefined",
-          name: dep.to,
-          in: g.elem.name,
-          kind: dep.kind,
-          range: g.elem.range
-        });
-    }
-    graph.set(gNode, globalDeps);
-    rangeMap.set(gNode, g.elem.range);
-    const seenLocals = new Set<Name>();
-    for (const localElem of g.local) {
-      const lNode = `local:${g.elem.name}:${localElem.name}`;
-      const localDeps = localDepsOf(localElem);
-      for (const dep of localDeps) {
-        if (dep.to === localElem.name)
-          return err({
-            tag: "SelfReference",
-            name: localElem.name,
-            kind: dep.kind,
-            range: localElem.range
-          });
-        const isDefinedLocal = seenLocals.has(dep.to);
-        const isDefinedGlobal = info.has(dep.to);
-        if (!isDefinedLocal && !isDefinedGlobal)
-          return err({
-            tag: "Undefined",
-            name: dep.to,
-            in: localElem.name,
-            kind: dep.kind,
-            range: localElem.range
-          });
-      }
-      graph.set(lNode, localDeps);
-      rangeMap.set(lNode, localElem.range);
-      seenLocals.add(localElem.name);
-    }
-  }
-  return succ({ graph, rangeMap });
-}
-
-function depToNode(fromNode: string, dep: Dependency): string {
-  if (fromNode.startsWith("global:"))
-    return `global:${dep.to}`;
-  const li = fromNode.split(":");
-  return `local:${li[1]}:${dep.to}`;
-}
-
-function detectCycle(
-  graph: DepGraph,
-  ranges: Map<string, Range>
-): Result<true, CtxError> {
-  const visited = new Set<string>();
-  const stack: string[] = [];
-  const onStack = new Set<string>();
-
-  function dfs(v: string): Result<true, CtxError> {
-    visited.add(v);
-    stack.push(v);
-    onStack.add(v);
-
-    const deps = graph.get(v) ?? [];
-    for (const dep of deps) {
-      const to = depToNode(v, dep);
-      if (!graph.has(to))
-        continue;
-      if (!visited.has(to)) {
-        const r = dfs(to);
-        if (isErr(r))
-          return r;
-      } else if (onStack.has(to)) {
-        const idx = stack.indexOf(to);
-        const cyclePath = stack.slice(idx).map((_, i) => ({
-          from: stack[idx + i],
-          to: stack[idx + i + 1] ?? to,
-          kind: dep.kind
-        }));
-        return err({
-          tag: "Cycle",
-          path: cyclePath,
-          range: ranges.get(to)!
-        });
-      }
-    }
-    stack.pop();
-    onStack.delete(v);
-    return succ(true);
-  }
-  for (const v of graph.keys()) {
-    if (!visited.has(v)) {
-      const r = dfs(v);
+function collect(t: PTerm, scope: Scope, dep: number): Result<true, ContextError> {
+  switch (t.tag) {
+    case "Sort":
+      break;
+    case "Variable": {
+      const r = checkVariable(scope, t.name, t.range);
       if (isErr(r))
         return r;
+      break;
+    }
+    case "Lambda":
+    case "Pi":
+    case "Sigma": {
+      const result = collectBindersThenBody(t.binders, t.body, scope, dep);
+      if (isErr(result))
+        return result;
+      break;
+    }
+    case "Arrow": {
+      const result0 = collect(t.in, scope, dep);
+      if (isErr(result0))
+        return result0;
+      const result1 = collect(t.out, scope, dep);
+      if (isErr(result1))
+        return result1;
+      break;
+    }
+    case "Pair": {
+      const result0 = collect(t.first, scope, dep);
+      if (isErr(result0))
+        return result0;
+      const result1 = collect(t.second, scope, dep);
+      if (isErr(result1))
+        return result1;
+      if (t.type) {
+        const result2 = collect(t.type, scope, dep);
+        if (isErr(result2))
+          return result2;
+      }
+      break;
+    }
+    case "First":
+    case "Second": {
+      const result = collect(t.pair, scope, dep);
+      if (isErr(result))
+        return result;
+      break;
+    }
+    case "Prod": {
+      const result0 = collect(t.first, scope, dep);
+      if (isErr(result0))
+        return result0;
+      const result1 = collect(t.second, scope, dep);
+      if (isErr(result1))
+        return result1;
+      break;
+    }
+    case "Let": {
+      const result = collectLet(t, scope, dep);
+      if (isErr(result))
+        return result;
+      break;
+    }
+    case "Apply": {
+      for (const e of t.apply) {
+        const result = collect(e, scope, dep);
+        if (isErr(result))
+          return result;
+      }
+      break;
     }
   }
   return succ(true);
 }
 
-
-export function checkGlobalContext(ctx: PGlobalContext): Result<true, CtxError> {
-  const infoR = buildDefInfo(ctx);
-  if (isErr(infoR))
-    return infoR;
-  const graphR = buildDepGraph(ctx, infoR.value);
-  if (isErr(graphR))
-    return graphR;
-  const acyclicR = detectCycle(graphR.value.graph, graphR.value.rangeMap);
-  if (isErr(acyclicR))
-    return acyclicR;
+function checkDuplicate(scope: Scope, name: Name, range: Range): Result<true, ContextError> {
+  if (scope.context.some(e => e.name === name))
+    return err({
+      tag: "Duplicate",
+      place: scope.tag,
+      name,
+      range,
+    });
+  let cur = scope.parent;
+  while (cur) {
+    if (cur.context.some(e => e.name === name))
+      return err({
+        tag: "Duplicate",
+        place: scope.tag,
+        name,
+        range,
+      });
+    cur = cur.parent;
+  }
   return succ(true);
+}
+
+function collectBindersThenBody( binders: Binder[], body: PTerm, parent: Scope, dep: number): Result<true, ContextError> {
+  const end = body.range.end;
+  let currentScope = parent;
+  let depth = dep;
+  for (const b of binders) {
+    if (b.tag === "Var") {
+      const result = collect(b.type, currentScope, depth);
+      if (isErr(result))
+        return result;
+    } else {
+      if (b.type) {
+        const result = collect(b.type, currentScope, depth);
+        if (isErr(result))
+          return result;
+      }
+      const result = collect(b.def, currentScope, depth);
+      if (isErr(result))
+        return result;
+    }
+    depth += 1;
+    const nextScope = newScope("Local", currentScope, b.range.start, end, depth);
+    currentScope.children.push(nextScope);
+    if (b.tag === "Var")
+      for (const n of b.names) {
+        const dup = checkDuplicate(nextScope, n, b.range);
+        if (isErr(dup))
+          return dup;
+        nextScope.context.push(
+          pVarElem(n, b.type, b.range)
+        );
+      }
+    else {
+      const dup = checkDuplicate(nextScope, b.name, b.range);
+      if (isErr(dup))
+        return dup;
+      nextScope.context.push(
+        pDefElem(
+          b.name,
+          b.type ? b.type : undefined,
+          b.def,
+          b.range
+        )
+      );
+    }
+    currentScope = nextScope;
+  }
+  const result = collect(body, currentScope, depth);
+  if (isErr(result))
+    return result;
+  return succ(true);
+}
+
+function collectLet(t: PTerm & { tag: "Let" }, parent: Scope, dep: number): Result<true, ContextError> {
+  const end = t.body.range.end;
+  let currentScope = parent;
+  const scopes: Scope[] = [];
+  let depth = dep;
+  for (const b of t.binders) {
+    if (b.tag === "Var") {
+      const result = collect(b.type, currentScope, depth);
+      if (isErr(result))
+        return result;
+    } else {
+      if (b.type) {
+        const result = collect(b.type, currentScope, depth);
+        if (isErr(result))
+          return result;
+      }
+      const result = collect(b.def, currentScope, depth);
+      if (isErr(result))
+        return result;
+    }
+    depth += 1;
+    const nextScope = newScope("Local", currentScope, b.range.start, end, depth);
+    currentScope.children.push(nextScope);
+    scopes.push(nextScope);
+    if (b.tag === "Var") {
+      for (const n of b.names) {
+        const dup = checkDuplicate(nextScope, n, b.range);
+        if (isErr(dup))
+          return dup;
+        nextScope.context.push(
+          pVarElem(n, b.type, b.range)
+        );
+      }
+    } else {
+      const dup = checkDuplicate(nextScope, b.name, b.range);
+      if (isErr(dup))
+        return dup;
+      nextScope.context.push(
+        pDefElem(
+          b.name,
+          b.type ? b.type : undefined,
+          b.def,
+          b.range
+        )
+      );
+    }
+    currentScope = nextScope;
+  }
+  if (t.type) {
+    const result = collect(t.type, currentScope, depth);
+    if (isErr(result))
+      return result;
+  }
+  const result0 = collect(t.def, currentScope, depth);
+  if (isErr(result0))
+    return result0;
+  depth += 1;
+  const letScope = newScope("Local", currentScope, t.range.start, end, depth);
+  currentScope.children.push(letScope);
+  const dup = checkDuplicate(letScope, t.name, t.range);
+  if (isErr(dup))
+    return dup;
+  letScope.context.push(
+    pDefElem(
+      t.name,
+      t.type
+        ? t.binders.length === 0
+          ? t.type
+          : Pi(t.binders, t.type, t.range)
+        : undefined,
+      t.binders.length === 0
+        ? t.def
+        : Lambda(t.binders, t.def, t.range),
+      t.range
+    )
+  );
+  const result1 = collect(t.body, letScope, depth);
+  if (isErr(result1))
+    return result1;
+  return succ(true);
+}
+
+function collectGlobalElement(global: PGlobalElement, parent: Scope, dep: number): Result<true, ContextError> {
+  const end = global.range.end;
+  let currentScope = parent;
+  const scopes: Scope[] = [];
+  let depth = dep;
+  for (const b of global.binders) {
+    if (b.tag === "Var") {
+      const result = collect(b.type, currentScope, depth);
+      if (isErr(result))
+        return result;
+    } else {
+      if (b.type) {
+        const result = collect(b.type, currentScope, depth);
+        if (isErr(result))
+          return result;
+      }
+      const result = collect(b.def, currentScope, depth);
+      if (isErr(result))
+        return result;
+    }
+    depth += 1;
+    const nextScope = newScope("Local", currentScope, b.range.start, end, depth);
+    currentScope.children.push(nextScope);
+    scopes.push(nextScope);
+    if (b.tag === "Var")
+      for (const n of b.names) {
+        const dup = checkDuplicate(nextScope, n, b.range);
+        if (isErr(dup))
+          return dup;
+        nextScope.context.push(
+          pVarElem(n, b.type, b.range)
+        );
+      }
+    else {
+      const dup = checkDuplicate(nextScope, b.name, b.range);
+      if (isErr(dup))
+        return dup;
+      nextScope.context.push(
+        pDefElem(
+          b.name,
+          b.type ? b.type : undefined,
+          b.def,
+          b.range
+        )
+      );
+    }
+    currentScope = nextScope;
+  }
+  const result = collect(global.type, currentScope, depth);
+  if (isErr(result))
+    return result;
+  if (global.tag === "Def") {
+    const result0 = collect(global.def, currentScope, depth);
+    if (isErr(result0))
+      return result0;
+  }
+  return succ(true);
+}
+
+export function buildGlobalScope(globals: PGlobalContext): Result<Scope, ContextError> {
+  const end = {
+    line: Number.MAX_SAFE_INTEGER,
+    character: Number.MAX_SAFE_INTEGER,
+  };
+  let depth = 0;
+  const root = newScope("Global", null, { line: 0, character: 0 }, end, 0);
+  let currentScope = root;
+  for (const global of globals) {
+    const result = collectGlobalElement(global, currentScope, depth);
+    if (isErr(result))
+      return result;
+    depth += 1;
+    const nextScope = newScope("Global", currentScope, global.range.start, end, depth);
+    currentScope.children.push(nextScope);
+    const dup = checkDuplicate(nextScope, global.name, global.range);
+    if (isErr(dup))
+      return dup;
+    const type =
+      global.binders.length === 0
+        ? global.type
+        : Pi(global.binders, global.type, global.range);
+    if (global.tag === "Var") {
+      nextScope.context.push(
+        pVarElem(
+          global.name,
+          type,
+          global.range
+        )
+      );
+    } else {
+      const def =
+        global.binders.length === 0
+          ? global.def
+          : Lambda(global.binders, global.def, global.range);
+      nextScope.context.push(
+        pDefElem(
+          global.name,
+          type,
+          def,
+          global.range
+        )
+      );
+    }
+    currentScope = nextScope;
+  }
+  return succ(root);
 }

@@ -5,9 +5,10 @@ import { type PGlobalContext } from "./pdef";
 import { err, isErr, succ, type Result } from "./result";
 import { type TokenType, Tokenizer } from "./tokenize";
 import { Parser } from "./parse";
-import { type Term, type CtxElement, judgCtx } from "./ast";
-import { wellFormed } from "./typecheck";
-import { elabGlobalContext } from "./trans";
+import { wellFormedGlobal } from "./typecheck";
+import { elabGlobalContext } from "./pton";
+import { type Term, type GlobalElement } from "./indexast";
+import { toGlobalContext } from "./ntoi";
 
 type Phase = "tokenize" | "parse" | "context" | "typecheck";
 
@@ -103,13 +104,14 @@ function tokenDesc(t: TokenType): string {
 function showTerm(t: Term): string {
   switch (t.tag) {
     case "Sort":
+    case "Free":
       return t.name;
-    case "Var":
-      return t.name;
+    case "Bind":
+      return t.index.toString();
     case "Lam":
-      return `(fun (${t.name} : ${showTerm(t.type)}) => ${showTerm(t.body)})`;
+      return `(fun ${showTerm(t.type)} => ${showTerm(t.body)})`;
     case "Pi":
-      return `(forall (${t.name} : ${showTerm(t.type)}), ${showTerm(t.body)})`;
+      return `(forall ${showTerm(t.type)}, ${showTerm(t.body)})`;
     case "Pair":
       return `<${showTerm(t.fst)}, ${showTerm(t.snd)}>${t.as ? ` : ${showTerm(t.as)}` : ``}`;
     case "Fst":
@@ -117,15 +119,15 @@ function showTerm(t: Term): string {
     case "Snd":
       return `${showTerm(t.pair)}.2`;
     case "Sig":
-      return `(exist (${t.name} : ${showTerm(t.type)}), ${showTerm(t.body)})`;
+      return `(exist ${showTerm(t.type)}, ${showTerm(t.body)})`;
     case "Let":
-      return `(let ${t.name}${t.type ? ` : ${showTerm(t.type)}` : ``} := ${showTerm(t.def)} in ${showTerm(t.body)})`;
+      return `(let ${t.type ? `${showTerm(t.type)} ` : ``}:= ${showTerm(t.def)} in ${showTerm(t.body)})`;
     case "App":
       return `(${showTerm(t.fun)} ${showTerm(t.arg)})`;
   }
 }
 
-function showCtxElement(e: CtxElement): string {
+function showCtxElement(e: GlobalElement): string {
   if (e.tag === "Def")
     return `def ${e.name} : ${showTerm(e.type)} := ${showTerm(e.def)}`;
   else
@@ -133,25 +135,100 @@ function showCtxElement(e: CtxElement): string {
 }
 
 const init =
-`def Nat: Prop := forall A: Prop, (A -> A) -> A -> A;
+`def Truth: Prop := forall A: Prop, A -> A;
+
+def id: Truth := fun (A : Prop) (x : A) => x;
+
+
+def Contra: Prop := forall (A: Prop), A;
+
+
+def And_intro (A B C: Prop) (im_a: C -> A) (im_b: C -> B): C -> A & B :=
+  fun c: C => <im_a c, im_b c>;
+
+
+def Or (A B: Prop): Prop :=
+  forall C: Prop, (A -> C) -> (B -> C) -> C;
+
+def Or_intro_left (A B: Prop): A -> Or A B :=
+  fun (a: A) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_a a;
+
+def Or_intro_right (A B: Prop): B -> Or A B :=
+  fun (b: B) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_b b;
+
+def Or_elim (A B C: Prop) (im_a: A -> C) (im_b: B -> C): Or A B -> C :=
+  fun u: Or A B => u C im_a im_b;
+
+
+def Not (A: Prop): Prop := A -> Contra;
+
+def Not_elim: forall A: Prop, Contra -> A :=
+  fun (A: Prop) (co: Contra) => co A;
+
+{-
+def EM: Prop := forall A: Prop, Or A (Not A);
+
+def DNE: Prop := forall A: Prop, Not (Not A) -> A;
+
+def EM_to_DNE: EM -> DNE :=
+  fun (em: EM)
+    (A: Prop)
+    (nna: Not (Not A)) =>
+      Or_elim A (Not A) A (id A) (fun na: Not A => Not_elim A (nna na)) (em A);
+
+def DNE_to_EM: DNE -> EM :=
+  fun (dne: DNE) (A: Prop) =>
+    let nnEM (p: Not (Or A (Not A))) :=
+      let na := fun a: A => p (Or_intro_left A (Not A) a)
+      in p (Or_intro_right A (Not A) na)
+    in dne (Or A (Not A)) nnEM;
+-}
+
+def Eq (A: Prop) (a b: A): Prop := forall P: A -> Prop, P a -> P b;
+
+def Eq_ref (A: Prop) (a: A): Eq A a a := fun P: A -> Prop => id (P a);
+
+def Eq_symm (A: Prop) (a b: A): Eq A a b -> Eq A b a :=
+  fun (eqab: Eq A a b) (P: A -> Prop) =>
+    let q := eqab (fun x : A => P x -> P a)
+    in q (id (P a));
+
+def Eq_trans (A: Prop) (a b c: A) : Eq A a b -> Eq A b c -> Eq A a c :=
+  fun (eqab: Eq A a b)
+    (eqbc: Eq A b c)
+    (P: A -> Prop)
+    (pa: P a) =>
+      eqbc P (eqab P pa);
+
+
+def funEq (A B: Prop) (f g: A -> B): Prop :=
+  forall a: A, Eq B (f a) (g a);
+
+def FunEq (A B: Prop) (f g: A -> B): Prop :=
+  Eq (A -> B) f g;
+
+def F_to_f (A B: Prop) (f g: A -> B): FunEq A B f g -> funEq A B f g :=
+  fun (F: FunEq A B f g)
+    (a: A)
+    (R: B -> Prop) =>
+      F (fun h: A -> B => R (h a));
+
+
+def Nat: Prop := forall A: Prop, (A -> A) -> A -> A;
 
 def zero: Nat :=
   fun (A: Prop) (f: A -> A) (x: A) => x;
 
-def succ : Nat -> Nat :=
-  fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => f (n A f x);
+def succ (n : Nat): Nat :=
+  fun (A : Prop) (f : A -> A) (x : A) => f (n A f x);
 
-def iter : Nat -> forall (A : Prop), (A -> A) -> A -> A :=
-  fun (n : Nat) (A : Prop) (f : A -> A) (x : A) => n A f x;
+def iter (n : Nat) (A : Prop) (f : A -> A) (x : A): A :=
+  n A f x;
 
-def rec : Nat -> forall (A: Prop), A -> (Nat -> A -> A) -> A :=
-  fun (n : Nat)
-    (A : Prop)
-    (a : A)
-    (s : Nat -> A -> A) =>
-      let step (p : Nat & A) :=
-        <succ p.1, s p.1 p.2>
-      in (n (Nat & A) step <zero, a>).2;
+def rec (n : Nat) (A : Prop) (a : A) (s : Nat -> A -> A): A :=
+  let step (p : Nat & A) :=
+    <succ p.1, s p.1 p.2>
+  in (n (Nat & A) step <zero, a>).2;
 
 
 def Bool: Prop := forall (A: Prop), A -> A -> A;
@@ -189,103 +266,25 @@ def Vec (A: Prop) (n: Nat): Prop :=
   forall V: Nat -> Prop,
     V zero -> (forall m: Nat, A -> V m -> V (succ m)) -> V n;
 
-def nilv (A: Prop): Vec A zero :=
+def Vec_nil (A: Prop): Vec A zero :=
   fun (V: Nat -> Prop)
     (x: V zero)
     (f: forall m: Nat, A -> V m -> V (succ m))
       => x;
 
-def consv (A: Prop) (n: Nat): A -> Vec A n -> Vec A (succ n) :=
+def Vec_cons (A: Prop) (n: Nat): A -> Vec A n -> Vec A (succ n) :=
   fun (a: A)
     (s: Vec A n)
     (V: Nat -> Prop)
     (x: V zero)
     (f: forall m: Nat, A -> V m -> V (succ m))
       => f n a (s V x f);
-
-
-def and_intro (A B C: Prop) (im_a: C -> A) (im_b: C -> B): C -> A & B :=
-  fun c: C => <im_a c, im_b c>;
-
-
-def Union (A B: Prop): Prop :=
-  forall C: Prop, (A -> C) -> (B -> C) -> C;
-
-def in_l (A B: Prop): A -> Union A B :=
-  fun (a: A) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_a a;
-
-def in_r (A B: Prop): B -> Union A B :=
-  fun (b: B) (C: Prop) (im_a: A -> C) (im_b: B -> C) => im_b b;
-
-def or_elim (A B C: Prop) (im_a: A -> C) (im_b: B -> C): Union A B -> C :=
-  fun union: Union A B => union C im_a im_b;
-
-
-def Truth: Prop := forall A: Prop, A -> A;
-
-def id (A : Prop) (x : A) : A := x;
-
-
-def Contra: Prop := forall (A: Prop), A;
-
-def Not (A: Prop): Prop := A -> Contra;
-
-def Not_elim: forall A: Prop, Contra -> A :=
-  fun (A: Prop) (co: Contra) => co A;
-
-
-def EM: Prop := forall A: Prop, Union A (Not A);
-
-def DNE: Prop := forall A: Prop, Not (Not A) -> A;
-
-def EM_to_DNE: EM -> DNE :=
-  fun (em: EM)
-    (A: Prop)
-    (nna: Not (Not A)) =>
-      or_elim A (Not A) A (id A) (fun na: Not A => Not_elim A (nna na)) (em A);
-
-def DNE_to_EM: DNE -> EM :=
-  fun (dne: DNE) (A: Prop) =>
-    let nnEM (p: Not (Union A (Not A))) :=
-      let na := fun a: A => p (in_l A (Not A) a)
-      in p (in_r A (Not A) na)
-    in dne (Union A (Not A)) nnEM;
-
-
-def Eq (A: Prop) (a b: A): Prop := forall P: A -> Prop, P a -> P b;
-
-def ref (A: Prop) (a: A): Eq A a a := fun P: A -> Prop => id (P a);
-
-def symm (A: Prop) (a b: A): Eq A a b -> Eq A b a :=
-  fun (eqab: Eq A a b) (P: A -> Prop) =>
-    let q := eqab (fun x : A => P x -> P a)
-    in q (id (P a));
-
-def trans (A: Prop) (a b c: A) : Eq A a b -> Eq A b c -> Eq A a c :=
-  fun (eqab: Eq A a b)
-    (eqbc: Eq A b c)
-    (P: A -> Prop)
-    (pa: P a) =>
-      eqbc P (eqab P pa);
-
-
-def funEq (A B: Prop) (f g: A -> B): Prop :=
-  forall a: A, Eq B (f a) (g a);
-
-def FunEq (A B: Prop) (f g: A -> B): Prop :=
-  Eq (A -> B) f g;
-
-def F_to_f (A B: Prop) (f g: A -> B): FunEq A B f g -> funEq A B f g :=
-  fun (F: FunEq A B f g)
-    (a: A)
-    (R: B -> Prop) =>
-      F (fun h: A -> B => R (h a));`
+`
 
 export default function App() {
   const [source, setSource] = useState(init);
   const [error, setError] = useState<UIError | null>(null);
   const [success, setSuccess] = useState<string>("");
-  const [successDefs, setSuccessDefs] = useState<string[]>([]);
   const [pGlobalContext, setPGlobalContext] = useState<PGlobalContext>([]);
   const [isPending, startTransition] = useTransition();
   const runIdRef = useRef(0);
@@ -311,34 +310,24 @@ export default function App() {
               ctxR.err.error.tag === "UnexpectedChar"
                 ? `不正な文字 ${ctxR.err.error.char} を検出しました。`
                 : "コメントが閉じられていません。",
-            detail: ctxR.err.error,
+            range: ctxR.err.range,
           });
         case "Context": {
           const e = ctxR.err.error;
-          let msg = "";
+          let msg: string;
           switch (e.tag) {
-            case "DuplicateGlobal":
-              msg = `グローバル定義 ${e.name} が重複しています。`;
-              break;
-            case "DuplicateLocal":
-              msg = `ローカル定義 ${e.name} が重複しています。`;
-              break;
-            case "SelfReference":
-              msg = `${e.kind} にて自分の名前 ${e.name} を参照しています。`;
-              break;
             case "Undefined":
-              msg = `定義 ${e.in} の中で未定義の名前 ${e.name} (${e.kind}) が使われています。`;
+              msg = `未定義の名前 ${e.name} (${e.kind}) が使われています。`;
               break;
-            case "Cycle":
-              msg = "定義に循環依存があります:\n" +
-                e.path.map(p => `${p.from} → ${p.to} (${p.kind})`).join("\n");
+            case "Duplicate":
+              msg = `名前 ${e.name} が重複しています。`;
               break;
           }
           return err({
             phase: "context",
             title: "文脈エラー",
             message: msg,
-            detail: e,
+            range: ctxR.err.range,
           });
         }
         case "UnexpectedToken":
@@ -349,11 +338,11 @@ export default function App() {
         phase: "parse",
         title: "構文解析エラー",
         message: msg,
-        detail: ctxR.err,
+        range: ctxR.err.range,
       });
     }
     const pctx = ctxR.value;
-    setPGlobalContext(pctx);
+    setPGlobalContext(pctx.context);
     return succ(true);
   }
 
@@ -372,12 +361,11 @@ export default function App() {
   const runTypeCheck = () => {
     setError(null);
     setSuccess("");
-    setSuccessDefs([]);
-    const jc = judgCtx(elabGlobalContext(pGlobalContext), []);
-    const wf = wellFormed(jc);
-    for (const c of jc.global) {
-      console.log(c);
+    const global = toGlobalContext(elabGlobalContext(pGlobalContext));
+    for (const c of global) {
+      console.log(showCtxElement(c));
     }
+    const wf = wellFormedGlobal(global);
     if (isErr(wf)) {
       let msg = "";
       switch (wf.err.error.tag) {
@@ -385,8 +373,12 @@ export default function App() {
           msg = `Type は型を持ちません。\n\n` +
             `参照元: ${showCtxElement(wf.err.at)}`;
           break;
-        case "UnboundVariable":
+        case "UnboundVariableName":
           msg = `変数 ${wf.err.error.name} は定義されていません。\n` +
+            `参照元: ${showCtxElement(wf.err.at)}`;
+          break;
+        case "UnboundVariableIndex":
+          msg = `変数 ${wf.err.error.index} は定義されていません。\n` +
             `参照元: ${showCtxElement(wf.err.at)}`;
           break;
         case "ExpectedSort":
@@ -420,8 +412,7 @@ export default function App() {
       });
       return;
     }
-    setSuccess("✔ すべての定義は正しく型付けされました");
-    setSuccessDefs(pGlobalContext.map(e => e.elem.name));
+    setSuccess(`✔ ${global.length} 個目の型検査に成功`);
   };
 
   return (
@@ -442,8 +433,7 @@ export default function App() {
           {error && renderError(error)}
           {success &&
             <div className="success">
-              {success+" "}
-              {successDefs.join(", ")}
+              {success}
             </div>
           }
         </div>

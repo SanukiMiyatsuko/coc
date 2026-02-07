@@ -1,11 +1,11 @@
 export type Sort = "Prop" | "Type";
 export type Name = string;
-export type Position = { line: number; col: number };
+export type Position = { line: number; character: number };
 export type Range = { start: Position; end: Position };
 export type PType = PTerm;
-export type Binder = VarBinder | DefBinder;
-export type VarBinder = { tag: "Var"; names: Name[], type: PType; range: Range };
-export type DefBinder = { tag: "Def"; name: Name; type?: PType; def: PType; range: Range };
+export type Binder =
+  | { tag: "Var"; names: Name[], type: PType; range: Range }
+  | { tag: "Def"; name: Name; type?: PType; def: PType; range: Range };
 export type PTerm =
   | { tag: "Sort"; name: Sort; range: Range }
   | { tag: "Variable"; name: Name; range: Range }
@@ -20,8 +20,8 @@ export type PTerm =
   | { tag: "Let"; name: Name; binders: Binder[]; type?: PType; def: PTerm; body: PTerm; range: Range }
   | { tag: "Apply"; apply: PTerm[]; range: Range };
 
-export const varBinder = (names: string[], type: PType, bindRange: Range): VarBinder => ({ tag: "Var", names, type, range: bindRange });
-export const defBinder = (name: string, type: PType | undefined, def: PType, bindRange: Range): DefBinder => ({ tag: "Def", name, type, def, range: bindRange });
+export const varBinder = (names: string[], type: PType, range: Range): Binder => ({ tag: "Var", names, type, range });
+export const defBinder = (name: string, type: PType | undefined, def: PType, range: Range): Binder => ({ tag: "Def", name, type, def, range });
 export const Sort = (name: Sort, range: Range): PTerm => ({ tag: "Sort", name, range });
 export const Variable = (name: string, range: Range): PTerm => ({ tag: "Variable", name, range });
 export const Lambda = (binders: Binder[], body: PTerm, range: Range): PTerm => ({ tag: "Lambda", binders, body, range });
@@ -37,25 +37,31 @@ export const Apply = (apply: PTerm[], range: Range): PTerm => ({ tag: "Apply", a
 
 export type PLocalElement =
   | { tag: "Var"; name: Name; type: PTerm; range: Range }
-  | { tag: "Def"; name: Name; type: PTerm | undefined; def: PTerm; range: Range };
+  | { tag: "Def"; name: Name; type?: PTerm; def: PTerm; range: Range };
 export type PLocalContext = PLocalElement[];
 
-export const pVarElem = (name: Name, type: PTerm, range: Range): PLocalElement => ({ tag: "Var", name, type, range });
-export const pDefElem = (name: Name, type: PTerm | undefined, def: PTerm, range: Range): PLocalElement => ({ tag: "Def", name, type, def, range });
+export const pVarElem = (name: Name, type: PTerm, range: Range): PLocalElement => ({ tag: "Var", name, type, range: range });
+export const pDefElem = (name: Name, type: PTerm | undefined, def: PTerm, range: Range): PLocalElement => ({ tag: "Def", name, type, def, range: range });
+
+export type Place = "Global" | "Local";
+export type Scope = { tag: Place;  parent: Scope | null; context: PLocalContext; children: Scope[]; range: Range; depth: number };
+
+export const newScope = (tag: Place, parent: Scope | null, start: Position, end: Position, depth: number): Scope =>
+  ({ tag, parent, context: [], children: [], range: { start, end }, depth });
 
 export type PGlobalElement =
-  | { tag: "Var"; name: Name; type: PTerm; range: Range }
-  | { tag: "Def"; name: Name; type: PTerm; def: PTerm; range: Range };
-export type PGlobal = { elem: PGlobalElement; local: PLocalContext };
+  | { tag: "Var"; name: Name; binders: Binder[]; type: PTerm; range: Range }
+  | { tag: "Def"; name: Name; binders: Binder[]; type: PTerm; def: PTerm; range: Range };
 
-export const pGlobalElem = (name: Name, type: PTerm, def: PTerm | undefined, range: Range): PGlobalElement => def ? { tag: "Def", name, type, def, range } : { tag: "Var", name, type, range };
-export const pGlobal = (elem: PGlobalElement, local: PLocalContext): PGlobal => ({ elem, local });
+export const pGlobalElem = (name: Name, binders: Binder[], type: PTerm, def: PTerm | undefined, range: Range): PGlobalElement =>
+  def ? { tag: "Def", name, binders, type, def, range } : { tag: "Var", name, binders, type, range };
 
-export type PGlobalContext = PGlobal[];
+export type PGlobalContext = PGlobalElement[];
 
 export function pFreeVariables(t: PTerm): Set<Name> {
+  const env = new Set<Name>();
   const acc = new Set<Name>();
-  collect(t, new Set(), acc);
+  collect(t, env, acc);
   return acc;
 }
 
@@ -86,8 +92,10 @@ function collect(t: PTerm, env: Set<Name>, acc: Set<Name>) {
       return;
     }
     case "First":
-    case "Second":
-      return collect(t.pair, env, acc);
+    case "Second": {
+      collect(t.pair, env, acc);
+      return;
+    }
     case "Prod": {
       collect(t.first, env, acc);
       collect(t.second, env, acc);
